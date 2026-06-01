@@ -1,8 +1,8 @@
 /**
- * Agribuddy Card  v1.1.3
+ * Agribuddy Card  v1.1.4
  * type: custom:agribuddy-card
  *
- * v1.1.3 — Theme toggle + section reorder + scroll containers
+ * v1.1.4 — Water all + duplicate plant + section reorder + scroll containers
  *  - Fixed unability for user to drill down into plant details using the scrollable plant list.
  *  - New Settings → Card display → Theme toggle (Light / Dark). Light uses
  *    HA theme variables so custom themes are respected; Dark uses a
@@ -1525,7 +1525,7 @@ class AgribuddyCard extends HTMLElement {
 
       <div id="view-container"></div>
 
-      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.1.3</div>
+      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.1.4</div>
 
       ${this._tplPlantOverlay()}
       ${this._tplSettingsOverlay()}
@@ -1770,6 +1770,7 @@ class AgribuddyCard extends HTMLElement {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-accent" id="add-plant-to-plot-btn">+ Add plant</button>
+          ${plants.length ? `<button class="btn" id="water-all-btn">💧 Water all</button>` : ""}
           ${plot.virtual ? "" : `<button class="btn btn-danger" id="remove-plot-btn">Remove plot</button>`}
         </div>
       </div>
@@ -1785,9 +1786,45 @@ class AgribuddyCard extends HTMLElement {
     if (back) back.onclick = () => this._backToMain();
     const addBtn = this._el("add-plant-to-plot-btn");
     if (addBtn) addBtn.onclick = () => this._openAddPlant(this._activePlot.id, this._activePlot.name);
+    const waterAllBtn = this._el("water-all-btn");
+    if (waterAllBtn) waterAllBtn.onclick = () => this._waterAll();
     const remBtn = this._el("remove-plot-btn");
     if (remBtn) remBtn.onclick = () => this._removePlot(this._activePlot.id);
     this._bindPlantRows();
+  }
+
+  /**
+   * Mark every plant in the active plot as watered by logging a `watered`
+   * event for each. Uses today's date. Refreshes the plot view afterward.
+   */
+  async _waterAll() {
+    const plot = this._activePlot;
+    if (!plot) return;
+    const plants = plot.plants || [];
+    if (!plants.length) return;
+    if (!confirm(`Mark all ${plants.length} plant${plants.length === 1 ? "" : "s"} in "${plot.name}" as watered today?`)) return;
+    const date = new Date().toISOString().slice(0, 10);
+    const btn = this._el("water-all-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Watering…"; }
+    try {
+      // Log a watered event per plant. Run sequentially to stay friendly
+      // to the integration's storage writes (no API quota cost — watering
+      // is local-only).
+      for (const p of plants) {
+        const pid = p.plant_id || p.id;
+        await this._hass.callService(DOMAIN, "log_event", {
+          plant_id: pid, event_type: "watered", note: "", date,
+        });
+      }
+      this._ok(`Watered ${plants.length} plant${plants.length === 1 ? "" : "s"}.`);
+      await this._fetchPlots();
+      const freshPlot = (this._plotsCache || []).find(pl => pl.id === plot.id);
+      if (freshPlot) this._activePlot = freshPlot;
+      this._renderCurrentView();
+    } catch (e) {
+      this._err("Water all failed", this._fmtErr(e, "agribuddy"));
+      if (btn) { btn.disabled = false; btn.textContent = "💧 Water all"; }
+    }
   }
 
   async _removePlot(plotId) {
@@ -2213,6 +2250,8 @@ class AgribuddyCard extends HTMLElement {
     this._el("save-evt-btn").onclick = () => this._saveEvent();
     this._el("save-ps-btn").onclick = () => this._savePlantSettings();
     this._el("remove-plant-btn").onclick = () => this._removePlant();
+    const dupBtn = this._el("duplicate-plant-btn");
+    if (dupBtn) dupBtn.onclick = () => this._duplicatePlant();
     const saveOvBtn = this._el("save-ov-btn");
     const clearOvBtn = this._el("clear-ov-btn");
     if (saveOvBtn) saveOvBtn.onclick = () => this._saveOverrides();
@@ -2463,6 +2502,7 @@ class AgribuddyCard extends HTMLElement {
               <div class="form-row"><span class="form-label">Grow plot / location</span><input class="form-input" type="text" id="ps-location"></div>
               <div style="display:flex;gap:8px;margin-top:4px">
                 <button class="btn btn-accent" style="flex:1;padding:8px" id="save-ps-btn">Save</button>
+                <button class="btn" id="duplicate-plant-btn">⧉ Duplicate</button>
                 <button class="btn btn-danger" id="remove-plant-btn">Remove plant</button>
               </div>
             </div>
@@ -3089,7 +3129,52 @@ class AgribuddyCard extends HTMLElement {
       .catch(e => this._err("Failed to remove plant", this._fmtErr(e, "agribuddy")));
   }
 
-  /* ── Settings overlay ──────────────────────────────────────────────────── */
+  /**
+   * Duplicate the active plant. Opens the add-plant overlay prefilled with
+   * this plant's cached species_data and jumps straight to the form step —
+   * no search, no API call. The user can change the name, start type/date,
+   * and target plot before confirming, letting them quickly create another
+   * of the same plant in the same or a different grow plot.
+   */
+  _duplicatePlant() {
+    const plant = this._activePlant;
+    if (!plant) return;
+    const sd = plant.species_data;
+    if (!sd) {
+      this._err(
+        "Can't duplicate",
+        "This plant has no cached plant data to copy."
+      );
+      return;
+    }
+    // Resolve the plot this plant currently lives in so the duplicate
+    // defaults to the same location (user can change it on the form).
+    const plotId = this._activePlot ? this._activePlot.id : (plant.plot_id || null);
+    const plotName = this._activePlot ? this._activePlot.name : (plant.plot_name || "");
+
+    // Close the plant detail overlay, open a fresh add-plant overlay, then
+    // jump directly to the prefilled form step using the existing
+    // species_data (which the backend normalizer already shaped).
+    this._close("plant-overlay");
+    this._el("add-plant-overlay")?.remove();
+    const div = document.createElement("div");
+    div.innerHTML = this._tplAddPlantOverlayInline(plotName);
+    const overlay = div.firstElementChild;
+    this._el("card-root").appendChild(overlay);
+    this._wireAddPlantOverlay(overlay, plotId);
+
+    const stepSearch = overlay.querySelector("#add-step-search");
+    const stepForm = overlay.querySelector("#add-step-form");
+    // Prefill the form from the existing plant's species_data (0 API calls).
+    this._selectSearchResult(sd, overlay, stepSearch, stepForm);
+    // Seed the display-name field with the existing plant's name so the
+    // user starts from a sensible default they can tweak.
+    const nameInput = overlay.querySelector("#add-display-name");
+    if (nameInput) nameInput.value = plant.plant_name || plant.name || nameInput.value;
+    // Update the header to make the duplicate intent clear.
+    const hdr = overlay.querySelector("#add-plant-hdr-title");
+    if (hdr) hdr.textContent = `Duplicate plant${plotName ? ` in ${plotName}` : ""}`;
+  }
 
   _tplSettingsOverlay() {
     const title = this._config.title || "My Garden";
@@ -3288,7 +3373,7 @@ class AgribuddyCard extends HTMLElement {
         <span style="color:var(--secondary-text-color)">API client:</span>
         <span style="color:${ok ? "#0F6E56" : "#993C1D"};font-weight:600">${ok ? "✓ Ready" : "✗ Not loaded"}</span>${usageRow}
         <span style="color:var(--secondary-text-color)">Backend http_api:</span>
-        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.1.3)"}</span>
+        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.1.4)"}</span>
       </div>`;
       // Pre-fill the form fields from backend values when card config doesn't override
       const wsel = this._el("cfg-weather");
@@ -4086,7 +4171,7 @@ if (!window.customCards.some(c => c.type === "agribuddy-card")) {
   });
 }
 console.info(
-  "%c Agribuddy CARD %c v1.1.3 ",
+  "%c Agribuddy CARD %c v1.1.4 ",
   "background:#1D9E75;color:#fff;font-weight:bold;padding:2px 4px;border-radius:4px 0 0 4px",
   "background:#0F6E56;color:#fff;padding:2px 4px;border-radius:0 4px 4px 0",
 );

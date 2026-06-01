@@ -38,7 +38,7 @@ type: custom:agribuddy-card
 title: My Garden
 temp_unit: auto
 ```
-<img width="1316" height="427" alt="agribuddy-img" src="agribuddy-img.png" />
+<img width="1316" height="427" alt="agribuddy-img" src="https://github.com/sauln1/agribuddy-card/blob/27254fae63d202578ff9ce9380e6e112b70d28c9/agribud-img.png" />
 
 
 Documentation for the functionality of this card can be found in the main [Agribuddy integration repository ReadMe.](https://github.com/sauln1/Agribuddy/blob/main/README.md)

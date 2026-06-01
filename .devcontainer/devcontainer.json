@@ -1,50 +1,70 @@
 // For format details, see https://aka.ms/devcontainer.json
 // Uses custom-cards/custom-card-devcontainer image for Home Assistant + Dev environment
 {
-  "name": "Agribuddy Card",
+  "name": "Home Assistant Custom Card Dev",
 
-    "image": "mcr.microsoft.com/devcontainers/base:debian",
-    "postCreateCommand": "scripts/setup",
-    "forwardPorts": [
-        8123
-    ],
-    "portsAttributes": {
-        "8123": {
-            "label": "Home Assistant",
-            "onAutoForward": "notify"
-        }
-    },
-    "customizations": {
-        "vscode": {
-            "extensions": [
-                "charliermarsh.ruff",
-                "github.vscode-pull-request-github",
-                "ms-python.python",
-                "ms-python.vscode-pylance",
-                "ryanluker.vscode-coverage-gutters"
-            ],
-            "settings": {
-                "files.eol": "\n",
-                "editor.tabSize": 4,
-                "editor.formatOnPaste": true,
-                "editor.formatOnSave": true,
-                "editor.formatOnType": false,
-                "files.trimTrailingWhitespace": true,
-                "python.analysis.typeCheckingMode": "basic",
-                "python.analysis.autoImportCompletions": true,
-                "[python]": {
-                    "editor.defaultFormatter": "charliermarsh.ruff"
-                }
-            }
-        }
-    },
-    "remoteUser": "vscode",
-    "features": {
-        "ghcr.io/devcontainers/features/python:1": {
-            "version": "3.14"
-        },
-        "ghcr.io/devcontainers-extra/features/apt-packages:1": {
-            "packages": "ffmpeg,libturbojpeg0,libpcap-dev"
-        }
+  // Use published devcontainer image
+  "image": "ghcr.io/custom-cards/custom-card-devcontainer:latest",
+  "remoteUser": "vscode",
+
+  // Set working directory
+  "workspaceFolder": "/workspaces/test",
+  
+  // Mount project to workspace, dist to Lovelace plugins, and config directory for Home Assistant
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspaces/test,type=bind",
+    "source=${localWorkspaceFolder}/dist,target=/config/www/workspace,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/config,target=/config,type=bind"
+  ],
+
+  // Forward Home Assistant port
+  "forwardPorts": [8123],
+  "portsAttributes": {
+    "8123": {
+      "label": "Home Assistant",
+      "onAutoForward": "notify"
     }
+  },
+
+  // Container environment variables for Home Assistant setup
+  "containerEnv": {
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+    "DEVCONTAINER": "1",
+    "HASS_USERNAME": "dev",
+    "HASS_PASSWORD": "dev",
+    "LOVELACE_REMOTE_FILES": "http://localhost:5000/boilerplate-card.js"
+  },
+
+  // Setup Home Assistant and install dependencies
+  "postCreateCommand": "container setup && corepack enable && yarn install",
+  "postStartCommand": "container launch & yarn start & wait",
+
+  // VS Code extensions for development
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.vscode-github-actions",
+        "github.vscode-pull-request-github",
+        "bierner.lit-html",
+        "redhat.vscode-yaml", 
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "typescript.enablePromptUseWorkspaceTsdk": true,
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.fixAll.eslint": "explicit"
+          }
+        },
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "typescript.tsserver.pluginPaths": [
+          "node_modules/typescript/lib"
+        ],
+        "files.eol": "\n",
+        "task.allowAutomaticTasks": "on"
+      }
+    }
+  }
 }

@@ -1,6 +1,26 @@
 /**
- * Agribuddy Card  v1.1.5
+ * Agribuddy Card  v1.2.0
  * type: custom:agribuddy-card
+ *
+ * v1.2.0 — Plant Profile radar, per-plant calendar, recolor
+ *  - Main view: removed the global planner; the Plants list is now the
+ *    primary element. A hardiness "Zone" pill is shown (set in Settings).
+ *  - Drill-down: the plant image is replaced by a Plant Profile radar chart
+ *    + bar legend (Sunlight, Water, Zones, Size, Growth 0-2; Care 0-10).
+ *    Missing values render as a dash with an empty bar.
+ *  - Drill-down: care instructions are now collapsible per-section dropdowns
+ *    (Start Indoors / Transplant Outdoors / Direct Sow / Harvesting); empty
+ *    sections are omitted. Stale (pre-v1.2.0) plants lazily backfill their
+ *    richer data from the /name endpoint on first open.
+ *  - Drill-down: per-plant calendar with a Week grid (events + weather) and a
+ *    Season bubble timeline (one continuous line that changes color across
+ *    lifecycle stages: seed=green, indoor=purple, transplant=blue,
+ *    harvest=yellow, removed=grey), with a year stepper.
+ *  - New "Indoor start" start type + event; the terminal event was renamed
+ *    "dead" -> "removed".
+ *  - Default theme recolored to blue/dark-grey with an orange accent (radar
+ *    stays green); the Home Assistant theme follows HA's CSS variables.
+ *  - Settings: a "Hardiness Zone Range" field (two free-text values).
  *
  * v1.1.5 — Grow plot dropdown + Unassigned plot surfacing
  *  - Plant details: "Grow plot" is now a dropdown (Unassigned first, then
@@ -63,7 +83,8 @@ const evColors = type => {
   if (type === "sprouted") return ["#E6F5DA", "#2F6017"];
   if (type === "transplanted") return ["#E1F5EE", "#0F6E56"];
   if (type === "planted") return ["#E5DBC8", "#5A4221"];
-  if (type === "dead") return ["#D6D6D6", "#2A2A2A"];
+  if (type === "indoor_start") return ["#EEE9FB", "#3C2E73"];
+  if (type === "dead" || type === "removed") return ["#D6D6D6", "#2A2A2A"];
   if (type === "needs_water") return ["#FFF4D6", "#9C7008"];
   return ["var(--secondary-background-color)", "var(--primary-text-color)"];
 };
@@ -81,9 +102,24 @@ const PLANNER_EVENT_COLORS = {
   sprouted: "#7BC453",
   transplanted: "#1D9E75",
   planted: "#8B6F47",
-  dead: "#4A4A4A",
+  indoor_start: "#9B6FE0",
+  // v1.2.0: terminal event renamed dead→removed (dark grey). `dead` kept as
+  // an alias so any legacy event still renders before the backend migration.
+  removed: "#5F6B78",
+  dead: "#5F6B78",
   needs_water: "#E0B23C",
   other: "#B0B0B0",
+};
+
+// Lifecycle-stage colors for the per-plant season bubble timeline. These are
+// the "bubble" colors per the v1.2.0 spec: seed=green, indoor=purple,
+// transplant=blue, harvest=yellow, removed=dark grey.
+const SEASON_BUBBLE_COLORS = {
+  seed: "#5BC47E",
+  indoor_start: "#9B6FE0",
+  transplanted: "#3F86D6",
+  harvested: "#E8C13C",
+  removed: "#5F6B78",
 };
 
 // Human-readable event names used by the day-detail overlay & legend
@@ -96,7 +132,9 @@ const EVENT_LABELS = {
   sprouted: "Sprouted",
   transplanted: "Transplanted",
   planted: "Planted",
-  dead: "Died",
+  indoor_start: "Indoor start",
+  removed: "Removed",
+  dead: "Removed",
   rain_detected: "Rain",
   frost_alert: "Frost alert",
   snow: "Snow",
@@ -146,7 +184,9 @@ const stageBadge = p => {
     return [`Planted in ${dpt}d`, "#E6F1FB", "#185FA5"];
   }
   const days = p.days_growing || 0;
-  const start = p.start_type === "transplant" ? "Transplant" : "Seed";
+  const start = p.start_type === "transplant" ? "Transplant"
+    : p.start_type === "indoor_start" ? "Indoor start"
+      : "Seed";
   const label = `${start} · Day ${days}`;
   return days < 7 ? [label, "#FAEEDA", "#854F0B"]
     : days < 21 ? [label, "#EAF3DE", "#3B6D11"]
@@ -252,6 +292,8 @@ const CSS = `
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--divider-color);color:var(--secondary-text-color)}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.zone-row{display:flex;justify-content:center;margin:-6px 0 14px}
+.zone-pill{display:inline-flex;align-items:center;gap:4px;background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--secondary-text-color);cursor:default}
 .metric{background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:10px;text-align:center;cursor:pointer;transition:background .15s,border-color .15s}
 .metric:hover{background:var(--divider-color);border-color:var(--primary-text-color)}
 .metric-val{font-size:20px;font-weight:600}
@@ -296,6 +338,7 @@ const CSS = `
    grows (stacked-card mode), so this height accommodates roughly the
    same row count. */
 .plants-scroll{max-height:320px;overflow-y:auto;background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:10px;margin-bottom:8px;scrollbar-width:thin}
+.plants-scroll-primary{max-height:420px}
 .plants-scroll::-webkit-scrollbar{width:6px}
 .plants-scroll::-webkit-scrollbar-thumb{background:var(--divider-color);border-radius:3px}
 .plot-card{background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:10px;padding:14px;cursor:pointer;transition:border-color .12s,transform .12s}
@@ -326,7 +369,7 @@ const CSS = `
 /* Inline planner */
 .planner-controls{display:flex;align-items:center;gap:6px;margin-bottom:10px}
 .planner-tab{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--divider-color);background:transparent;cursor:pointer;color:var(--secondary-text-color);font-family:inherit}
-.planner-tab.active{background:#1D9E75;border-color:#0F6E56;color:#fff;font-weight:500}
+.planner-tab.active{background:var(--agribuddy-accent, #E8913C);border-color:var(--agribuddy-accent, #E8913C);color:#1A1206;font-weight:500}
 /* Planner top bar: prev/next + period label */
 .planner-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:6px 10px;background:var(--secondary-background-color);border-radius:8px}
 .planner-nav-btn{background:transparent;border:1px solid var(--divider-color);color:var(--primary-text-color);font-size:14px;width:28px;height:28px;border-radius:6px;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center}
@@ -466,6 +509,48 @@ const CSS = `
   overflow:hidden;
   box-shadow:0 1px 3px rgba(0,0,0,.06);
 }
+/* ── v1.2.0 Plant Profile: radar + bars (replaces the old plant image) ── */
+.tcm-profile{position:relative;padding:12px 12px 8px;border-bottom:0.5px solid var(--divider-color)}
+.tcm-profile-label{font-size:11px;letter-spacing:1px;color:var(--secondary-text-color);margin-bottom:8px}
+.tcm-profile-body{display:flex;gap:12px;align-items:center}
+.tcm-radar{flex:0 0 150px;width:150px}
+.radar-ring-outer{fill:rgba(29,158,117,.06);stroke:var(--divider-color);stroke-width:1}
+.radar-ring-inner{fill:none;stroke:var(--divider-color);stroke-width:1;opacity:.6}
+.radar-spoke{stroke:var(--divider-color);stroke-width:1;opacity:.6}
+.radar-fill{fill:rgba(29,158,117,.28);stroke:#1D9E75;stroke-width:2}
+.radar-dot{fill:#1D9E75}
+.tcm-bars{flex:1;display:flex;gap:12px}
+.tcm-bar-col{flex:1;display:flex;flex-direction:column;gap:9px}
+.tcm-bar-lbl{font-size:10px;letter-spacing:.5px;color:var(--secondary-text-color)}
+.tcm-bar-row{display:flex;align-items:center;justify-content:space-between;gap:7px;font-size:12px}
+.tcm-bar-val{color:var(--primary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
+.tcm-bar-track{width:34px;height:5px;flex:0 0 auto;background:var(--divider-color);border-radius:3px;overflow:hidden}
+.tcm-bar-fill{display:block;height:100%;background:#1D9E75}
+/* ── v1.2.0 Care-instruction dropdowns ── */
+.tcm-care-sections{margin-top:12px}
+.tcm-care-sec{border:0.5px solid var(--divider-color);border-radius:8px;margin-bottom:6px;overflow:hidden}
+.tcm-care-sec-hd{display:flex;align-items:center;gap:8px;padding:9px 10px;cursor:pointer;list-style:none;font-size:12px}
+.tcm-care-sec-hd::-webkit-details-marker{display:none}
+.tcm-care-sec-icon{font-size:14px}
+.tcm-care-sec-title{flex:1;letter-spacing:.5px;color:var(--agribuddy-accent, #E8913C);font-weight:500}
+.tcm-care-sec-chev{color:var(--secondary-text-color);transition:transform .15s}
+details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
+.tcm-care-sec-body{padding:0 10px 10px;font-size:12px;line-height:1.55;color:var(--secondary-text-color)}
+/* ── v1.2.0 Per-plant calendar ── */
+.tcm-cal{margin-top:14px;border-top:0.5px solid var(--divider-color);padding-top:12px}
+.tcm-cal-controls{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.tcm-cal-nav{display:flex;align-items:center;gap:6px;margin-left:auto;color:var(--secondary-text-color)}
+.tcm-cal-navbtn{background:transparent;border:0;font-size:16px;color:var(--secondary-text-color);cursor:pointer;padding:0 4px}
+.tcm-cal-navlbl{font-size:12px;min-width:64px;text-align:center}
+.planner-row-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.evt-dot-weather{opacity:.85}
+.tcm-cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:10.5px;color:var(--secondary-text-color)}
+.tcm-cal-leg{display:flex;align-items:center;gap:5px}
+.pcal-mo{fill:var(--secondary-text-color)}
+.pcal-mo-cur{fill:var(--agribuddy-accent, #E8913C);font-weight:600}
+.pcal-axis{stroke:var(--divider-color);stroke-width:.5}
+.pcal-today{stroke:var(--agribuddy-accent, #E8913C);stroke-width:1;stroke-dasharray:3 3;opacity:.6}
+.pcal-empty{fill:var(--secondary-text-color)}
 /* Plant image area — soft green gradient backdrop, status pill in
    top-right corner. Image fills the area when present; emoji is rendered
    centered when no image is available. */
@@ -502,6 +587,7 @@ const CSS = `
 .tcm-status-danger    {color:#993C1D}
 .tcm-status-harvested {color:#5F5E5A}
 .tcm-status-dead      {color:#2A2A2A}
+.tcm-status-removed   {color:#2A2A2A}
 .tcm-status-scheduled {color:#185FA5}
 
 /* ── Season view ──────────────────────────────────────────────────────── */
@@ -945,14 +1031,23 @@ const CSS = `
    instances inside this card's shadow DOM.
    ════════════════════════════════════════════════════════════════════════ */
 
+/* v1.2.0 — in the Home Assistant theme, the new accent elements follow HA's
+   own CSS variables (so custom HA themes are respected). The default theme
+   below overrides --agribuddy-accent to orange instead. */
+:host(.theme-ha) .planner-tab.active{background:var(--primary-color);border-color:var(--primary-color);color:var(--text-primary-color, #fff)}
+:host(.theme-ha) .tcm-care-sec-title{color:var(--primary-color)}
+:host(.theme-ha) .pcal-mo-cur{fill:var(--primary-color)}
+:host(.theme-ha) .pcal-today{stroke:var(--primary-color)}
+
 :host(.theme-default){
-  --agribuddy-bg:          #1A1A1F;
-  --agribuddy-surface:     #2A2A30;
-  --agribuddy-surface-2:   #222227;
-  --agribuddy-border:      #3A3A40;
-  --agribuddy-text:        #F5F1E8;
-  --agribuddy-text-muted:  #7A7770;
-  --agribuddy-accent:      #F0997B;
+  /* v1.2.0 — blue-tinged dark-grey surfaces with an orange accent. */
+  --agribuddy-bg:          #121A24;
+  --agribuddy-surface:     #1B2735;
+  --agribuddy-surface-2:   #16202C;
+  --agribuddy-border:      #2B3A4C;
+  --agribuddy-text:        #E4ECF4;
+  --agribuddy-text-muted:  #8093A6;
+  --agribuddy-accent:      #E8913C;
   /* Brighter status pill backgrounds for dark mode (per user request) —
      more saturated than v1.0.x so they read clearly against dark surfaces. */
   --agribuddy-pill-healthy-bg:   #0E7559;
@@ -988,7 +1083,7 @@ const CSS = `
 :host(.theme-default) .api-status-box{background:var(--agribuddy-surface);color:var(--agribuddy-text)}
 :host(.theme-default) .plot-card-skeleton{background:var(--agribuddy-surface-2)}
 :host(.theme-default) .plot-card-add{border-color:var(--agribuddy-border);color:var(--agribuddy-text-muted)}
-:host(.theme-default) .plot-card-add:hover{border-color:#1D9E75;color:#1D9E75}
+:host(.theme-default) .plot-card-add:hover{border-color:var(--agribuddy-accent);color:var(--agribuddy-accent)}
 
 /* Borders + divider */
 :host(.theme-default) .divider{border-top-color:var(--agribuddy-border)}
@@ -1059,8 +1154,8 @@ const CSS = `
 /* Buttons */
 :host(.theme-default) .btn{background:var(--agribuddy-surface);color:var(--agribuddy-text);border-color:var(--agribuddy-border)}
 :host(.theme-default) .btn:hover{background:#33333A}
-:host(.theme-default) .btn-accent{background:#1D9E75;color:#fff}
-:host(.theme-default) .btn-accent:hover{background:#0F6E56}
+:host(.theme-default) .btn-accent{background:var(--agribuddy-accent);color:#1A1206}
+:host(.theme-default) .btn-accent:hover{background:#C8761F}
 
 /* Toggle groups */
 :host(.theme-default) .layout-toggle,
@@ -1070,7 +1165,7 @@ const CSS = `
 :host(.theme-default) .layout-toggle-btn:hover,
 :host(.theme-default) .theme-toggle-btn:hover{background:var(--agribuddy-border);color:var(--agribuddy-text)}
 :host(.theme-default) .layout-toggle-btn.active,
-:host(.theme-default) .theme-toggle-btn.active{background:#1D9E75;color:#fff}
+:host(.theme-default) .theme-toggle-btn.active{background:var(--agribuddy-accent);color:#1A1206}
 
 /* Calendar season label */
 :host(.theme-default) .cal-day-season-label{color:var(--agribuddy-text-muted);border-bottom-color:var(--agribuddy-border)}
@@ -1079,15 +1174,16 @@ const CSS = `
 
 /* Planner grid (week + season) */
 :host(.theme-default) .planner-controls .planner-tab{background:var(--agribuddy-surface);color:var(--agribuddy-text-muted);border-color:var(--agribuddy-border)}
-:host(.theme-default) .planner-controls .planner-tab.active{background:#1D9E75;color:#fff}
+:host(.theme-default) .planner-controls .planner-tab.active{background:var(--agribuddy-accent);color:#1A1206}
 :host(.theme-default) .season-plant-card{background:var(--agribuddy-surface);border-color:var(--agribuddy-border);color:var(--agribuddy-text)}
-:host(.theme-default) .season-plant-card:hover{background:#33333A;border-color:#1D9E75}
+:host(.theme-default) .season-plant-card:hover{background:var(--agribuddy-surface-2);border-color:var(--agribuddy-accent)}
 :host(.theme-default) .season-plant-meta{color:var(--agribuddy-text-muted)}
 
 /* Scrollbar thumb on plants-scroll + plot-strip */
 :host(.theme-default) .plot-strip-wrap::-webkit-scrollbar-thumb,
 :host(.theme-default) .plants-scroll::-webkit-scrollbar-thumb{background:var(--agribuddy-border)}
 :host(.theme-default) .plants-scroll{background:var(--agribuddy-surface);border-color:var(--agribuddy-border)}
+:host(.theme-default) .zone-pill{background:var(--agribuddy-surface);border-color:var(--agribuddy-border);color:var(--agribuddy-text)}
 
 /* Header (top of card) — title, subtitle, gear button */
 :host(.theme-default) .hdr-title{color:var(--agribuddy-text)}
@@ -1116,16 +1212,16 @@ const CSS = `
 :host(.theme-default) textarea.form-input{
   background:var(--agribuddy-surface);color:var(--agribuddy-text);border-color:var(--agribuddy-border);
 }
-:host(.theme-default) .form-input:focus{border-color:#1D9E75;outline:none}
+:host(.theme-default) .form-input:focus{border-color:var(--agribuddy-accent);outline:none}
 :host(.theme-default) .form-input::placeholder{color:var(--agribuddy-text-muted)}
 :host(.theme-default) .form-hint{color:var(--agribuddy-text-muted)}
 
 /* Recent Plants chip strip + search result cards */
 :host(.theme-default) .recent-plant-chip{background:var(--agribuddy-surface);border-color:var(--agribuddy-border);color:var(--agribuddy-text)}
-:host(.theme-default) .recent-plant-chip:hover{background:rgba(29,158,117,.18);border-color:#1D9E75}
+:host(.theme-default) .recent-plant-chip:hover{background:rgba(232,145,60,.18);border-color:var(--agribuddy-accent)}
 :host(.theme-default) .recent-plant-chip-name{color:var(--agribuddy-text)}
 :host(.theme-default) .search-results-grid > div{background:var(--agribuddy-surface);border-color:var(--agribuddy-border);color:var(--agribuddy-text)}
-:host(.theme-default) .search-results-grid > div:hover{background:#33333A;border-color:#1D9E75}
+:host(.theme-default) .search-results-grid > div:hover{background:var(--agribuddy-surface-2);border-color:var(--agribuddy-accent)}
 :host(.theme-default) .plant-image-placeholder{background:var(--agribuddy-surface);color:var(--agribuddy-text)}
 :host(.theme-default) .plant-image-wrap{background:var(--agribuddy-surface)}
 :host(.theme-default) .plant-info-cell{background:var(--agribuddy-surface);border-color:var(--agribuddy-border)}
@@ -1143,6 +1239,7 @@ const CSS = `
 :host(.theme-default) .tcm-status-danger    {color:#FFB5B5}
 :host(.theme-default) .tcm-status-harvested {color:#B0AFA8}
 :host(.theme-default) .tcm-status-dead      {color:#888888}
+:host(.theme-default) .tcm-status-removed   {color:#888888}
 :host(.theme-default) .tcm-status-scheduled {color:#A6CEF2}
 :host(.theme-default) .tcm-invasive-pill{background:rgba(122,30,30,.95);color:#FFB5B5}
 :host(.theme-default) .tcm-tile-light{background:#3A2A0F}
@@ -1359,7 +1456,12 @@ class AgribuddyCard extends HTMLElement {
       // Pre-warm the status cache so the add-plant overlay can render the
       // user's default state without waiting for them to open Settings first.
       this._apiFetch("/status")
-        .then(({ data }) => { this._apiStatusCache = data; })
+        .then(({ data }) => {
+          this._apiStatusCache = data;
+          // Zone pill on the main view reads from status; re-render once it
+          // arrives so the pill populates without waiting for another event.
+          if (this._view === "main") this._render();
+        })
         .catch(() => { });
     } else {
       this._updateLive();
@@ -1530,7 +1632,7 @@ class AgribuddyCard extends HTMLElement {
 
       <div id="view-container"></div>
 
-      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.1.5</div>
+      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.0</div>
 
       ${this._tplPlantOverlay()}
       ${this._tplSettingsOverlay()}
@@ -1584,6 +1686,18 @@ class AgribuddyCard extends HTMLElement {
         </div>`
       : "";
 
+    // Hardiness zone range from the status cache (user-entered, any system).
+    // Always shown as a pill: "Zone low–high", "Zone low", or "Zone –" when
+    // unset. v1.2.0.
+    const st = this._apiStatusCache || {};
+    const zLow = (st.hardiness_zone_low || "").trim();
+    const zHigh = (st.hardiness_zone_high || "").trim();
+    let zoneText = "–";
+    if (zLow && zHigh) zoneText = `${zLow}–${zHigh}`;
+    else if (zLow) zoneText = zLow;
+    else if (zHigh) zoneText = zHigh;
+    const zonePill = `<span class="zone-pill" id="zone-pill" title="Hardiness zone range (set in Settings)">📍 Zone ${this._esc(zoneText)}</span>`;
+
     return `
       ${this._tplPills(weather)}
       ${alertHtml}
@@ -1605,25 +1719,16 @@ class AgribuddyCard extends HTMLElement {
           <div class="metric-lbl">Need water</div>
         </div>
       </div>
-
-      <hr class="divider">
-      <div class="sec-title">
-        <span>Growth planner</span>
-        <div class="planner-controls">
-          <button class="planner-tab ${this._plannerScale === 'week' ? 'active' : ''}" data-scale="week">Week</button>
-          <button class="planner-tab ${this._plannerScale === 'season' ? 'active' : ''}" data-scale="season">Season</button>
-        </div>
-      </div>
-      ${this._tplPlanner(plants, weather)}
+      <div class="zone-row">${zonePill}</div>
 
       <hr class="divider">
       <div class="sec-title">
         <span>Plants</span>
-        ${plants.length > 5
+        ${plants.length > 6
         ? `<span style="font-size:11px;color:var(--secondary-text-color);font-weight:400">${plants.length} total · scroll for more</span>`
-        : ""}
+        : `<span style="font-size:11px;color:var(--secondary-text-color);font-weight:400">tap a plant for its calendar &amp; details</span>`}
       </div>
-      <div class="plants-scroll">${this._tplPlantTable(plants)}</div>
+      <div class="plants-scroll plants-scroll-primary">${this._tplPlantTable(plants)}</div>
 
       <hr class="divider">
       <div class="sec-title">
@@ -2019,8 +2124,9 @@ class AgribuddyCard extends HTMLElement {
           <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.watered}"></span>Watered</div>
           <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.fertilized}"></span>Fertilized</div>
           <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.sprouted}"></span>Sprouted</div>
+          <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.indoor_start}"></span>Indoor start</div>
           <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.harvested}"></span>Harvested</div>
-          <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.dead}"></span>Died</div>
+          <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.removed}"></span>Removed</div>
           <div class="leg-item"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS.other}"></span>Other</div>
         </div>
       </div>
@@ -2150,8 +2256,8 @@ class AgribuddyCard extends HTMLElement {
       const STATUS = {
         growing: { label: "Growing", bg: "#E1F5EE", color: "#0F6E56" },
         harvested: { label: "Harvested", bg: "#EAEAEA", color: "#5F5E5A" },
-        dead: { label: "Dead", bg: "#D6D6D6", color: "#2A2A2A" },
-        removed: { label: "Removed", bg: "#F4ECE2", color: "#7A6230" },
+        dead: { label: "Removed", bg: "#D6D6D6", color: "#2A2A2A" },
+        removed: { label: "Removed", bg: "#D6D6D6", color: "#2A2A2A" },
       };
       const sInfo = STATUS[p.end_status] || STATUS.growing;
       const endDisp = p.end_date
@@ -2327,9 +2433,15 @@ class AgribuddyCard extends HTMLElement {
              pill overlay, name + sci, soft pastel light/water tiles, key/value
              grid for the data, dividers between sections, taxonomy footer. -->
         <div class="tc tc-modern">
-          <!-- Plant: image area with status pill in the top-right corner -->
-          <div class="tcm-image" id="tc-image-wrap">
-            <div class="tcm-image-content" id="tc-image">🌱</div>
+          <!-- v1.2.0: Plant Profile — radar chart + bar legend replaces the
+               old plant image. Populated by _renderPlantProfile() in
+               _openPlantDetail. The status pill overlays the top-right. -->
+          <div class="tcm-profile" id="tc-profile-wrap">
+            <div class="tcm-profile-label">PLANT PROFILE</div>
+            <div class="tcm-profile-body">
+              <div class="tcm-radar" id="tc-radar"></div>
+              <div class="tcm-bars" id="tc-bars"></div>
+            </div>
             <span class="tcm-status-pill tcm-status-healthy" id="tc-status-pill">
               <span class="tcm-status-dot"></span>
               <span id="tc-status-text">Healthy</span>
@@ -2375,13 +2487,16 @@ class AgribuddyCard extends HTMLElement {
               <span class="tcm-kv-label">Toxicity</span>
               <span class="tcm-kv-value tcm-kv-value-warn" id="tc-toxicity">—</span>
             </div>
-            <!-- Care instructions: subtle divider, smaller text, scrollable -->
-            <div class="tcm-care">
-              <div class="tcm-care-label">Care instructions</div>
-              <div class="tcm-care-text" id="tc-care">—</div>
-            </div>
+            <!-- v1.2.0: Care instructions as collapsible per-section
+                 dropdowns (Start Indoors / Transplant Outdoors / Direct Sow /
+                 Harvesting). Sections with no data are omitted entirely.
+                 Populated by _renderCareInstructions(). -->
+            <div class="tcm-care-sections" id="tc-care-sections"></div>
             <!-- Taxonomy footer (family · genus · species) -->
             <div class="tcm-tax" id="tc-taxonomy">—</div>
+            <!-- v1.2.0: per-plant calendar (Week + Season bubble timeline).
+                 Populated by _renderPlantCalendar(). -->
+            <div class="tcm-cal" id="tc-calendar"></div>
           </div>
         </div>
         <!-- Footer actions: history, log event, settings -->
@@ -2399,9 +2514,11 @@ class AgribuddyCard extends HTMLElement {
                   <option value="fertilized">Fertilized</option>
                   <option value="pest_spotted">Pest spotted</option>
                   <option value="snow">Snow</option>
+                  <option value="indoor_start">Indoor start</option>
                   <option value="sprouted">Sprouted</option>
                   <option value="harvested">Harvested</option>
                   <option value="transplanted">Transplanted / repotted</option>
+                  <option value="removed">Removed (died / pulled)</option>
                   <option value="other">Other (add custom text in note)</option>
                 </select>
               </div>
@@ -2501,7 +2618,7 @@ class AgribuddyCard extends HTMLElement {
               <div class="form-row"><span class="form-label">Display name</span><input class="form-input" type="text" id="ps-name"></div>
               <div class="form-row"><span class="form-label">Verdantly variety ID</span><input class="form-input" type="text" id="ps-slug" readonly style="opacity:.5"></div>
               <div class="form-row"><span class="form-label">Started from</span>
-                <select class="form-select" id="ps-start-type"><option value="seed">Seed</option><option value="transplant">Transplant</option></select>
+                <select class="form-select" id="ps-start-type"><option value="seed">Seed</option><option value="indoor_start">Indoor start</option><option value="transplant">Transplant</option></select>
               </div>
               <div class="form-row"><span class="form-label">Start date</span><input class="form-input" type="date" id="ps-start-date"></div>
               <div class="form-row"><span class="form-label">Grow plot</span><select class="form-input" id="ps-plot"></select></div>
@@ -2587,6 +2704,414 @@ class AgribuddyCard extends HTMLElement {
     this._el("close-archive-btn").onclick = () => this._close("archive-history-overlay");
   }
 
+  /* ── v1.2.0 Plant Profile (radar + bars) ─────────────────────────────── */
+
+  // Compute the six 0–2 metric scores (Care is 0–10 = sum of the other five)
+  // from a plant's cached species_data. Returns {score, display} per metric;
+  // score is null when the underlying data is missing (→ dash + empty bar).
+  _computeProfileMetrics(plant) {
+    const sd = plant.species_data || {};
+    const gr = sd.growingRequirements || {};
+    const gd = sd.growthDetails || {};
+
+    const clamp2 = n => Math.max(0, Math.min(2, n));
+
+    // Sunlight — map the categorical requirement to 0–2.
+    const sun = (plant.light_requirements || gr.sunlightRequirement || "").toLowerCase();
+    let sunScore = null, sunDisp = plant.light_requirements || gr.sunlightRequirement || "—";
+    if (sun) {
+      if (sun.includes("full")) sunScore = 2;
+      else if (sun.includes("part")) sunScore = 1;
+      else if (sun.includes("shade")) sunScore = 0;
+      else sunScore = 1;
+    }
+
+    // Water — categorical to 0–2.
+    const wat = (plant.water_use || gr.waterRequirement || "").toLowerCase();
+    let watScore = null, watDisp = plant.water_use || gr.waterRequirement || "—";
+    if (wat) {
+      if (wat.includes("high")) watScore = 2;
+      else if (wat.includes("mod") || wat.includes("med")) watScore = 1;
+      else if (wat.includes("low")) watScore = 0;
+      else watScore = 1;
+    }
+
+    // Zones — 0.25 pts per zone in the range, capped at 2.
+    const zr = gr.growingZoneRange || plant.growing_zone_range || "";
+    let zoneScore = null, zoneDisp = zr || "—";
+    if (zr && /\d/.test(zr)) {
+      const nums = (zr.match(/\d+/g) || []).map(Number);
+      if (nums.length >= 2) {
+        zoneScore = clamp2((Math.max(...nums) - Math.min(...nums)) * 0.25);
+      } else if (nums.length === 1) {
+        zoneScore = clamp2(0);
+      }
+    }
+
+    // Size — 0.25 pts per 5 height units, capped at 2. Raw number, unit-agnostic.
+    const h = gd.matureHeight ?? plant.mature_height;
+    const unit = gd.unit || plant.mature_height_unit || "";
+    let sizeScore = null, sizeDisp = "—";
+    if (h != null && !isNaN(Number(h))) {
+      sizeScore = clamp2((Number(h) / 5) * 0.25);
+      sizeDisp = `${Number(h)}${unit ? unit : ""}`;
+    }
+
+    // Growth — combine growthPeriod (Annual=1 / Perennial=0) and growthType
+    // (indeterminate=1 / determinate=0) into a single 0–2 (sum of signals).
+    // A missing signal contributes 0. If BOTH signals are absent → null (dash).
+    const period = (gd.growthPeriod || plant.growth_period || "").toLowerCase();
+    const gtype = (gd.growthType || plant.growth_type || "").toLowerCase();
+    let growthScore = null, growthDisp = "—";
+    const hasPeriod = period.includes("annual") || period.includes("perennial");
+    const hasType = gtype.includes("indetermin") || gtype.includes("determin");
+    if (hasPeriod || hasType) {
+      let s = 0;
+      if (period.includes("annual")) s += 1;
+      if (gtype.includes("indetermin")) s += 1;
+      else if (gtype.includes("determin")) s += 0;
+      growthScore = clamp2(s);
+      const parts = [];
+      if (hasPeriod) parts.push(gd.growthPeriod || plant.growth_period);
+      if (hasType) parts.push(gd.growthType || plant.growth_type);
+      growthDisp = parts.join(" · ") || "—";
+    }
+
+    // Care — sum of the five scores (each treated as 0 when null), 0–10.
+    const five = [sunScore, watScore, zoneScore, sizeScore, growthScore];
+    const anyPresent = five.some(s => s !== null);
+    let careScore = null, careDisp = "—";
+    if (anyPresent) {
+      careScore = five.reduce((a, s) => a + (s || 0), 0);
+      careDisp = careScore <= 3 ? "Low" : careScore <= 7 ? "Medium" : "High";
+    }
+
+    return {
+      sunlight: { score: sunScore, display: sunDisp, icon: "☀️", label: "Sunlight" },
+      water:    { score: watScore, display: watDisp, icon: "💧", label: "Water" },
+      zones:    { score: zoneScore, display: zoneDisp, icon: "📏", label: "Zones" },
+      size:     { score: sizeScore, display: sizeDisp, icon: "🌡️", label: "Size" },
+      growth:   { score: growthScore, display: growthDisp, icon: "⚡", label: "Growth" },
+      care:     { score: careScore, display: careDisp, icon: "🔧", label: "Care", max: 10 },
+    };
+  }
+
+  // Render the radar SVG (6 spokes) + the bar legend beside it.
+  _renderPlantProfile(plant) {
+    const m = this._computeProfileMetrics(plant);
+    const radarEl = this._el("tc-radar");
+    const barsEl = this._el("tc-bars");
+    if (!radarEl || !barsEl) return;
+
+    // Spoke order clockwise from top: Sunlight, Water, Size, Growth, Care, Zones.
+    const order = ["sunlight", "water", "size", "growth", "care", "zones"];
+    const cx = 90, cy = 86, R = 56;
+    const norm = k => {
+      const met = m[k];
+      if (met.score == null) return 0;
+      const max = met.max || 2;
+      return Math.max(0, Math.min(1, met.score / max));
+    };
+    const pt = (i, r) => {
+      const ang = (-90 + i * 60) * Math.PI / 180;
+      return [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+    };
+    const ringPts = scale => order.map((_, i) => pt(i, R * scale).map(n => n.toFixed(1)).join(",")).join(" ");
+    const dataPts = order.map((k, i) => pt(i, R * norm(k)).map(n => n.toFixed(1)).join(",")).join(" ");
+    const spokes = order.map((_, i) => {
+      const [x, y] = pt(i, R);
+      return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" class="radar-spoke"/>`;
+    }).join("");
+    const dots = order.map((k, i) => {
+      const [x, y] = pt(i, R * norm(k));
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.6" class="radar-dot"/>`;
+    }).join("");
+    const icons = order.map((k, i) => {
+      const [x, y] = pt(i, R + 14);
+      return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="13">${m[k].icon}</text>`;
+    }).join("");
+
+    radarEl.innerHTML = `<svg viewBox="0 0 180 168" width="100%" role="img" aria-label="Plant metric radar">
+      <polygon points="${ringPts(1)}" class="radar-ring-outer"/>
+      <polygon points="${ringPts(0.5)}" class="radar-ring-inner"/>
+      ${spokes}
+      <polygon points="${dataPts}" class="radar-fill"/>
+      ${dots}
+      ${icons}
+    </svg>`;
+
+    // Bars — two columns of three. Each: emoji + label, value text, small bar.
+    const cols = [["sunlight", "zones", "growth"], ["water", "size", "care"]];
+    const barFor = key => {
+      const met = m[key];
+      const max = met.max || 2;
+      const pct = met.score == null ? 0 : Math.max(0, Math.min(1, met.score / max)) * 100;
+      const filled = met.score != null;
+      const valTxt = met.score == null ? "—" : this._esc(String(met.display));
+      return `<div class="tcm-bar">
+        <div class="tcm-bar-lbl">${met.icon} ${met.label.toUpperCase()}</div>
+        <div class="tcm-bar-row">
+          <span class="tcm-bar-val">${valTxt}</span>
+          <span class="tcm-bar-track">${filled ? `<span class="tcm-bar-fill" style="width:${pct.toFixed(0)}%"></span>` : ""}</span>
+        </div>
+      </div>`;
+    };
+    barsEl.innerHTML = cols.map(c =>
+      `<div class="tcm-bar-col">${c.map(barFor).join("")}</div>`
+    ).join("");
+  }
+
+  /* ── v1.2.0 Care-instruction dropdowns ───────────────────────────────── */
+
+  _renderCareInstructions(plant) {
+    const host = this._el("tc-care-sections");
+    if (!host) return;
+    const sd = plant.species_data || {};
+    const ci = sd.careInstructions || {};
+    const planting = ci.plantingInstructions || {};
+    const sections = [
+      { icon: "🏠", title: "Start Indoors", text: planting.startIndoors },
+      { icon: "🌱", title: "Transplant Outdoors", text: planting.transplantOutdoors },
+      { icon: "🌾", title: "Direct Sow", text: planting.directSow },
+      { icon: "🧺", title: "Harvesting", text: ci.harvestingInstructions },
+    ].filter(s => s.text && String(s.text).trim());
+
+    if (!sections.length) {
+      const legacy = plant.care_instructions
+        || (sd.growingRequirements && sd.growingRequirements.careInstructions) || "";
+      host.innerHTML = legacy
+        ? `<div class="tcm-care-label">Care instructions</div><div class="tcm-care-text">${this._esc(legacy)}</div>`
+        : "";
+      return;
+    }
+    host.innerHTML = `<div class="tcm-care-label">Care instructions</div>` +
+      sections.map(s => `
+        <details class="tcm-care-sec">
+          <summary class="tcm-care-sec-hd">
+            <span class="tcm-care-sec-icon">${s.icon}</span>
+            <span class="tcm-care-sec-title">${this._esc(s.title)}</span>
+            <span class="tcm-care-sec-chev">⌄</span>
+          </summary>
+          <div class="tcm-care-sec-body">${this._esc(s.text)}</div>
+        </details>`).join("");
+  }
+
+  /* ── v1.2.0 Lazy species backfill ────────────────────────────────────── */
+
+  _speciesDataStale(plant) {
+    const sd = plant.species_data || {};
+    if (!sd || !Object.keys(sd).length) return false;
+    const ci = sd.careInstructions;
+    const gd = sd.growthDetails || {};
+    const hasCare = ci && typeof ci === "object" && Object.keys(ci).length;
+    const hasGrowth = gd.matureHeight != null || !!gd.growthType;
+    return !(hasCare || hasGrowth);
+  }
+
+  async _maybeBackfillSpecies(plant) {
+    const pid = plant.plant_id || plant.id;
+    if (!pid || !this._speciesDataStale(plant)) return;
+    this._backfilledIds = this._backfilledIds || new Set();
+    if (this._backfilledIds.has(pid)) return;
+    this._backfilledIds.add(pid);
+    try {
+      const { status, data } = await this._apiFetch("/backfill_species", {
+        method: "POST",
+        headers: { ...this._authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ plant_id: pid }),
+      });
+      if (status === 200 && data && data.refreshed && data.species_data) {
+        plant.species_data = data.species_data;
+        if (this._activePlant && (this._activePlant.plant_id || this._activePlant.id) === pid) {
+          this._renderPlantProfile(plant);
+          this._renderCareInstructions(plant);
+        }
+      }
+    } catch (e) {
+      console.warn("Agribuddy: species backfill failed:", e);
+    }
+  }
+
+  /* ── v1.2.0 Per-plant calendar (Week + Season bubble) ────────────────── */
+
+  _renderPlantCalendar(plant) {
+    const host = this._el("tc-calendar");
+    if (!host) return;
+    const scale = this._plantCalScale || "week";
+    const navLabel = scale === "week"
+      ? this._plantWeekRangeLabel()
+      : String(this._plantCalYear);
+    const body = scale === "week"
+      ? this._tplPlantWeek(plant)
+      : this._tplPlantSeason(plant);
+    host.innerHTML = `
+      <div class="tcm-cal-controls">
+        <button class="planner-tab ${scale === 'week' ? 'active' : ''}" data-pcal="week">Week</button>
+        <button class="planner-tab ${scale === 'season' ? 'active' : ''}" data-pcal="season">Season</button>
+        <div class="tcm-cal-nav">
+          <button class="tcm-cal-navbtn" data-pcalnav="prev">‹</button>
+          <span class="tcm-cal-navlbl">${this._esc(navLabel)}</span>
+          <button class="tcm-cal-navbtn" data-pcalnav="next">›</button>
+        </div>
+      </div>
+      ${body}`;
+    host.querySelectorAll("[data-pcal]").forEach(b => {
+      b.onclick = () => {
+        this._plantCalScale = b.dataset.pcal;
+        this._plantCalWeekOffset = 0;
+        this._renderPlantCalendar(plant);
+      };
+    });
+    host.querySelectorAll("[data-pcalnav]").forEach(b => {
+      b.onclick = () => {
+        const dir = b.dataset.pcalnav === "next" ? 1 : -1;
+        if ((this._plantCalScale || "week") === "week") {
+          this._plantCalWeekOffset = (this._plantCalWeekOffset || 0) + dir;
+        } else {
+          this._plantCalYear = (this._plantCalYear || new Date().getFullYear()) + dir;
+        }
+        this._renderPlantCalendar(plant);
+      };
+    });
+  }
+
+  _plantWeekRangeLabel() {
+    const { days } = this._plannerWeekRange(new Date(), this._plantCalWeekOffset || 0);
+    const mon = days[0], sun = days[6];
+    const sameMonth = mon.getMonth() === sun.getMonth();
+    const ws = mon.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const we = sun.toLocaleDateString("en-US", sameMonth ? { day: "numeric" } : { month: "short", day: "numeric" });
+    return `${ws}–${we}`;
+  }
+
+  _tplPlantWeek(plant) {
+    const today = new Date();
+    const todayKey = today.toISOString().slice(0, 10);
+    const { days } = this._plannerWeekRange(today, this._plantCalWeekOffset || 0);
+    const dayLbls = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const evts = this._eventsWithProjections(plant);
+    const wlog = this._weatherLog || {};
+    const hdrs = dayLbls.map((l, i) => {
+      const isToday = days[i].toISOString().slice(0, 10) === todayKey;
+      return `<div class="planner-hdr${isToday ? ' today' : ''}">${l} <span style="opacity:.5">${days[i].getDate()}</span></div>`;
+    }).join("");
+    const cells = days.map(d => {
+      const ds = d.toISOString().slice(0, 10);
+      const isToday = ds === todayKey;
+      const isFuture = d > today;
+      const dayEvts = evts.filter(e => e.date === ds);
+      const w = wlog[ds] || {};
+      const wdots = [];
+      if (w.rain) wdots.push(PLANNER_EVENT_COLORS.rain_detected);
+      if (w.snow) wdots.push(PLANNER_EVENT_COLORS.snow);
+      if (w.frost) wdots.push(PLANNER_EVENT_COLORS.frost_alert);
+      const dots = dayEvts.map(e => `<span class="evt-dot" style="background:${PLANNER_EVENT_COLORS[e.type] || PLANNER_EVENT_COLORS.other}" title="${this._esc(EVENT_LABELS[e.type] || e.type)}"></span>`).join("")
+        + wdots.map(c => `<span class="evt-dot evt-dot-weather" style="background:${c}"></span>`).join("");
+      return `<div class="plan-cell${isToday ? ' today' : ''}${isFuture ? ' future' : ''}">${dots}</div>`;
+    }).join("");
+    return `<div class="planner-hdrs">${hdrs}</div><div class="planner-row-single">${cells}</div>
+      ${this._tplPlantCalLegendWeek()}`;
+  }
+
+  _tplPlantCalLegendWeek() {
+    const items = [
+      ["watered", "Watered"], ["fertilized", "Fertilized"],
+      ["transplanted", "Transplant"], ["rain_detected", "Rain"],
+      ["frost_alert", "Frost"],
+    ];
+    return `<div class="tcm-cal-legend">${items.map(([k, l]) =>
+      `<span class="tcm-cal-leg"><span class="evt-dot" style="background:${PLANNER_EVENT_COLORS[k]}"></span>${l}</span>`
+    ).join("")}</div>`;
+  }
+
+  _tplPlantSeason(plant) {
+    const year = this._plantCalYear || new Date().getFullYear();
+    const evts = (plant.events || plant.events_sorted || []).slice()
+      .filter(e => e && e.date)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const xFor = iso => {
+      const d = new Date(iso + "T00:00:00");
+      const start = new Date(year, 0, 1);
+      const end = new Date(year + 1, 0, 1);
+      return Math.max(0, Math.min(1, (d - start) / (end - start)));
+    };
+    const inYear = e => (e.date || "").slice(0, 4) === String(year);
+    const firstOf = (types) => evts.find(e => inYear(e) && types.includes((e.type || "").toLowerCase()));
+    const startEv = firstOf(["planted", "seed", "indoor_start", "sprouted"]);
+    const transEv = firstOf(["transplanted"]);
+    const harvEv = firstOf(["harvested"]);
+    const remEv = evts.find(e => inYear(e) && ["removed", "dead"].includes((e.type || "").toLowerCase()));
+
+    const startType = (startEv?.type || plant.start_type || "seed").toLowerCase();
+    const startColor = startType === "indoor_start"
+      ? SEASON_BUBBLE_COLORS.indoor_start
+      : SEASON_BUBBLE_COLORS.seed;
+
+    const stages = [];
+    if (startEv) stages.push({ x: xFor(startEv.date), color: startColor, label: EVENT_LABELS[startType] || "Start" });
+    else if (plant.start_date && plant.start_date.slice(0, 4) === String(year)) {
+      stages.push({ x: xFor(plant.start_date), color: startColor, label: "Start" });
+    }
+    if (transEv) stages.push({ x: xFor(transEv.date), color: SEASON_BUBBLE_COLORS.transplanted, label: "Transplant" });
+    let endStage = null;
+    if (harvEv) endStage = { x: xFor(harvEv.date), color: SEASON_BUBBLE_COLORS.harvested, label: "Harvest" };
+    if (remEv) endStage = { x: xFor(remEv.date), color: SEASON_BUBBLE_COLORS.removed, label: "Removed" };
+    if (endStage) stages.push(endStage);
+    else {
+      const now = new Date();
+      const endX = now.getFullYear() === year ? xFor(now.toISOString().slice(0, 10)) : 1;
+      if (stages.length) stages.push({ x: endX, color: stages[stages.length - 1].color, label: "", growingEnd: true });
+    }
+
+    const W = 430, left = 16, right = 414, span = right - left, midY = 42;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const curYear = new Date().getFullYear();
+    const monthLabels = months.map((mo, i) => {
+      const x = left + span * ((i + 0.5) / 12);
+      const isCur = (year === curYear) && (new Date().getMonth() === i);
+      return `<text x="${x.toFixed(1)}" y="12" text-anchor="middle" font-size="9" class="${isCur ? 'pcal-mo-cur' : 'pcal-mo'}">${mo}</text>`;
+    }).join("");
+    const px = f => (left + span * f).toFixed(1);
+
+    let segs = "", caps = "";
+    if (stages.length >= 2) {
+      for (let i = 0; i < stages.length - 1; i++) {
+        const a = stages[i], b = stages[i + 1];
+        segs += `<line x1="${px(a.x)}" y1="${midY}" x2="${px(b.x)}" y2="${midY}" stroke="${a.color}" stroke-width="14" stroke-linecap="round"/>`;
+      }
+    }
+    stages.filter(s => !s.growingEnd).forEach(s => {
+      caps += `<circle cx="${px(s.x)}" cy="${midY}" r="9.5" fill="${s.color}"/>`;
+    });
+    if (!stages.length) {
+      segs = `<text x="${(W / 2).toFixed(0)}" y="${midY + 4}" text-anchor="middle" font-size="11" class="pcal-empty">No lifecycle events in ${year}</text>`;
+    }
+    const tx = px(xFor(new Date().toISOString().slice(0, 10)));
+    const todayMarker = (year === curYear)
+      ? `<line x1="${tx}" y1="18" x2="${tx}" y2="58" class="pcal-today"/>`
+      : "";
+
+    return `<svg viewBox="0 0 ${W} 64" width="100%" role="img" aria-label="Season timeline">
+      ${monthLabels}
+      ${todayMarker}
+      <line x1="${left}" y1="20" x2="${right}" y2="20" class="pcal-axis"/>
+      ${segs}
+      ${caps}
+    </svg>
+    ${this._tplPlantCalLegendSeason()}`;
+  }
+
+  _tplPlantCalLegendSeason() {
+    const items = [
+      ["seed", "Seed start"], ["indoor_start", "Indoor start"],
+      ["transplanted", "Transplant"], ["harvested", "Harvest"],
+      ["removed", "Removed"],
+    ];
+    return `<div class="tcm-cal-legend">${items.map(([k, l]) =>
+      `<span class="tcm-cal-leg"><span class="evt-dot" style="background:${SEASON_BUBBLE_COLORS[k]}"></span>${l}</span>`
+    ).join("")}</div>`;
+  }
+
   _openPlantDetail(pid) {
     const plant = this._allPlants().find(p => (p.plant_id || p.id) === pid);
     if (!plant) return;
@@ -2614,7 +3139,7 @@ class AgribuddyCard extends HTMLElement {
       pillEl.classList.remove(
         "tcm-status-healthy", "tcm-status-thirsty",
         "tcm-status-danger", "tcm-status-harvested",
-        "tcm-status-dead", "tcm-status-scheduled",
+        "tcm-status-dead", "tcm-status-removed", "tcm-status-scheduled",
       );
       pillEl.classList.add(`tcm-status-${statusInfo.state}`);
       pillText.textContent = statusInfo.label;
@@ -2624,16 +3149,12 @@ class AgribuddyCard extends HTMLElement {
     const invEl = this._el("tc-invasive");
     if (invEl) invEl.style.display = plant.invasive_alert ? "inline-flex" : "none";
 
-    // ── Plant image — real image if Verdantly provided one, else emoji ─
-    const imgEl = this._el("tc-image");
-    if (plant.image_url) {
-      // Embed the image; if it fails to load, fall back to emoji.
-      imgEl.innerHTML = `<img src="${this._esc(plant.image_url)}" loading="lazy"
-        alt="${this._esc(plant.common_name || "")}"
-        onerror="this.parentElement.textContent='${plantEmoji(plant.plant_name || plant.common_name || plant.name)}'">`;
-    } else {
-      imgEl.textContent = plantEmoji(plant.plant_name || plant.common_name || plant.name);
-    }
+    // ── Plant Profile: radar chart + bar legend (v1.2.0) ──────────────
+    // Replaces the old plant image. If the plant's cached species_data is
+    // stale (pre-v1.2.0, missing the richer /name fields), kick off a
+    // one-time lazy backfill, then re-render this overlay when it lands.
+    this._renderPlantProfile(plant);
+    this._maybeBackfillSpecies(plant);
 
     // ── Light + water chips (top banner) ──────────────────────────────
     this._el("tc-light-text").textContent = v(plant.light_requirements);
@@ -2707,9 +3228,10 @@ class AgribuddyCard extends HTMLElement {
       }
     }
 
-    // Care Instructions — replaces description per user spec
-    const care = plant.care_instructions || plant.description || "";
-    this._el("tc-care").textContent = care || "No care instructions available.";
+    // Care Instructions — v1.2.0: collapsible per-section dropdowns,
+    // sourced from the /name endpoint's careInstructions object. Empty
+    // sections are omitted.
+    this._renderCareInstructions(plant);
 
     // ── Taxonomy footer (family | genus | species) ────────────────────
     const taxEl = this._el("tc-taxonomy");
@@ -2720,6 +3242,14 @@ class AgribuddyCard extends HTMLElement {
       taxEl.textContent = "";
       taxEl.style.display = "none";
     }
+
+    // ── Per-plant calendar (Week + Season bubble timeline) — v1.2.0 ───
+    if (this._plantCalScale === undefined) this._plantCalScale = "week";
+    if (this._plantCalYear === undefined) {
+      this._plantCalYear = new Date().getFullYear();
+    }
+    if (this._plantCalWeekOffset === undefined) this._plantCalWeekOffset = 0;
+    this._renderPlantCalendar(plant);
 
     // ── Plant settings inputs (in collapsible footer) ─────────────────
     this._el("ps-name").value = plant.plant_name || plant.name || "";
@@ -2769,7 +3299,7 @@ class AgribuddyCard extends HTMLElement {
     let hasHarvested = false;
     for (const e of events) {
       const t = (e && e.type ? String(e.type).toLowerCase() : "");
-      if (t === "dead") return { state: "dead", label: "Dead" };
+      if (t === "dead" || t === "removed") return { state: "removed", label: "Removed" };
       if (t === "harvested" || t === "harvest") hasHarvested = true;
     }
     if (hasHarvested) return { state: "harvested", label: "Harvested" };
@@ -3253,6 +3783,17 @@ class AgribuddyCard extends HTMLElement {
           <span class="form-hint">Any entity is allowed. Rain/snow/frost are detected from the entity's state and attributes. Saved both in the card and on the integration backend.</span>
         </div>
 
+        <div class="set-section">Hardiness Zone Range</div>
+        <div class="form-row">
+          <span class="form-label">Hardiness Zone Range</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="form-input" type="text" id="cfg-zone-low" placeholder="low (e.g. 5a)" style="flex:1">
+            <span style="color:var(--secondary-text-color)">–</span>
+            <input class="form-input" type="text" id="cfg-zone-high" placeholder="high (e.g. 9b)" style="flex:1">
+          </div>
+          <span class="form-hint">Free text — works with any system (USDA, RHS, etc.). Shown as the "Zone" pill on the main view. Leave blank to show "Zone –".</span>
+        </div>
+
         <div class="set-section">Card display</div>
         <div class="form-row"><span class="form-label">Card title</span>
           <input class="form-input" type="text" id="cfg-title" value="${this._esc(title)}">
@@ -3346,6 +3887,11 @@ class AgribuddyCard extends HTMLElement {
       // Stash the status response so other UI surfaces (settings form,
       // add-plant overlay's state field pre-fill) can read default_state etc.
       this._apiStatusCache = data;
+      // Populate the hardiness zone range inputs from the backend.
+      const zl = this._el("cfg-zone-low");
+      const zh = this._el("cfg-zone-high");
+      if (zl) zl.value = (data.hardiness_zone_low || "");
+      if (zh) zh.value = (data.hardiness_zone_high || "");
       if (!box) return;
       if (!data.configured) {
         box.innerHTML = `<span style="color:#993C1D;font-weight:600">⚠ Integration not configured</span><br>
@@ -3391,7 +3937,7 @@ class AgribuddyCard extends HTMLElement {
         <span style="color:var(--secondary-text-color)">API client:</span>
         <span style="color:${ok ? "#0F6E56" : "#993C1D"};font-weight:600">${ok ? "✓ Ready" : "✗ Not loaded"}</span>${usageRow}
         <span style="color:var(--secondary-text-color)">Backend http_api:</span>
-        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.1.5)"}</span>
+        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.2.0)"}</span>
       </div>`;
       // Pre-fill the form fields from backend values when card config doesn't override
       const wsel = this._el("cfg-weather");
@@ -3435,6 +3981,8 @@ class AgribuddyCard extends HTMLElement {
   async _saveSettings() {
     const weather = this._el("cfg-weather")?.value;
     const title = this._el("cfg-title")?.value.trim() || "My Garden";
+    const zoneLow = (this._el("cfg-zone-low")?.value || "").trim();
+    const zoneHigh = (this._el("cfg-zone-high")?.value || "").trim();
 
     // 1. Persist card config (title + weather entity) by dispatching config-changed
     const newConfig = { ...this._config, title, weather_entity: weather, temp_unit: "auto" };
@@ -3444,8 +3992,8 @@ class AgribuddyCard extends HTMLElement {
       bubbles: true, composed: true,
     }));
 
-    // 2. Update backend so the coordinator uses the same weather entity.
-    // State filter is no longer stored — users enter it per-search.
+    // 2. Update backend so the coordinator uses the same weather entity and
+    // stores the hardiness zone range (for the main-view Zone pill).
     const btn = this._el("save-settings-btn");
     if (btn) { btn.textContent = "Saving…"; btn.disabled = true; }
     try {
@@ -3454,12 +4002,16 @@ class AgribuddyCard extends HTMLElement {
         headers: { ...this._authHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
           weather_entity: weather,
+          hardiness_zone_low: zoneLow,
+          hardiness_zone_high: zoneHigh,
         }),
       });
       if (data.ok) {
         this._apiStatusCache = {
           ...(this._apiStatusCache || {}),
           weather_entity: weather,
+          hardiness_zone_low: zoneLow,
+          hardiness_zone_high: zoneHigh,
         };
         this._close("settings-overlay");
         this._ok("Settings saved.");
@@ -3834,7 +4386,7 @@ class AgribuddyCard extends HTMLElement {
             <div class="form-row"><span class="form-label">Display name</span><input class="form-input" type="text" id="add-display-name"></div>
             <div class="form-row"><span class="form-label">Started from</span>
               <select class="form-select" id="add-start-type">
-                <option value="seed">Seed</option><option value="transplant">Transplant</option>
+                <option value="seed">Seed</option><option value="indoor_start">Indoor start</option><option value="transplant">Transplant</option>
               </select>
             </div>
             <div class="form-row"><span class="form-label">Planting date <span style="opacity:.7">(can be future)</span></span>
@@ -4189,7 +4741,7 @@ if (!window.customCards.some(c => c.type === "agribuddy-card")) {
   });
 }
 console.info(
-  "%c Agribuddy CARD %c v1.1.5 ",
+  "%c Agribuddy CARD %c v1.2.0 ",
   "background:#1D9E75;color:#fff;font-weight:bold;padding:2px 4px;border-radius:4px 0 0 4px",
   "background:#0F6E56;color:#fff;padding:2px 4px;border-radius:0 4px 4px 0",
 );

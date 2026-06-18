@@ -2,8 +2,8 @@
 
 This is the front end card for use with the [Agribuddy integration](https://github.com/sauln1/Agribuddy).
 
-![Version](https://img.shields.io/badge/version-1.1.4-1D9E75)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.1%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-1D9E75)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.1%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 [![HACS](https://img.shields.io/badge/HACS-default-orange.svg?style=flat-square)](https://hacs.xyz)
 

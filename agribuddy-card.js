@@ -985,22 +985,31 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 :host(.layout-portrait) .plot-table,
 :host(.layout-portrait) .plot-table tbody,
 :host(.layout-portrait) .plot-table tr,
-:host(.layout-portrait) .plot-table td{display:block;width:100%}
-:host(.layout-portrait) .plot-table tr.plant-row{
+:host(.layout-portrait) .plot-table td,
+:host(.layout-portrait) .plant-table tr,
+:host(.layout-portrait) .plant-table td{display:block;width:100%}
+:host(.layout-portrait) .plot-table tr.plant-row,
+:host(.layout-portrait) .plant-table tr.plant-row{
   border:1px solid var(--divider-color);border-radius:10px;
   margin-bottom:8px;padding:10px 12px;
   background:var(--card-background-color, #fff);
 }
-:host(.layout-portrait) .plot-table tr.plant-row td{padding:3px 0;border:0}
-:host(.layout-portrait) .plot-table tr.plant-row td.chev{display:none}
-:host(.layout-portrait) .plot-table tr.plant-row td.plant-table-meta::before{
+:host(.layout-portrait) .plot-table tr.plant-row td,
+:host(.layout-portrait) .plant-table tr.plant-row td{padding:3px 0;border:0}
+
+:host(.layout-portrait) .plot-table tr.plant-row td.chev,
+:host(.layout-portrait) .plant-table tr.plant-row td.chev{display:none}
+
+:host(.layout-portrait) .plot-table tr.plant-row td.plant-table-meta::before,
+:host(.layout-portrait) .plant-table tr.plant-row td.plant-table-meta::before{
   content:attr(data-label) ": ";
   color:var(--secondary-text-color);
   font-size:11px;font-weight:500;
   text-transform:uppercase;letter-spacing:.04em;
   margin-right:6px;
 }
-:host(.layout-portrait) .plot-table tr.plant-row td.plant-table-meta{
+:host(.layout-portrait) .plot-table tr.plant-row td.plant-table-meta,
+:host(.layout-portrait) .plant-table tr.plant-row td.plant-table-meta{
   font-size:12px;
   display:flex;justify-content:space-between;align-items:baseline;gap:8px;
 }
@@ -1009,6 +1018,8 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 :host(.layout-portrait) .tcm-tile-row{grid-template-columns:1fr}
 :host(.layout-portrait) .tcm-body{padding:12px 14px 14px}
 :host(.layout-portrait) .popup-card{max-width:100%}
+/* v1.2.1: Hide headers since they are not needed for mobile view. */
+:host(.layout-portrait) .plant-table thead{display:none}
 .conn-status{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:8px;font-size:12px;margin-bottom:14px}
 .conn-ok{background:#E1F5EE;color:#0F6E56}
 .conn-err{background:#FAECE7;color:#993C1D}

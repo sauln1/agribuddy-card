@@ -21,6 +21,8 @@
  *  - Default theme recolored to blue/dark-grey with an orange accent (radar
  *    stays green); the Home Assistant theme follows HA's CSS variables.
  *  - Settings: a "Hardiness Zone Range" field (two free-text values).
+ *  - Fixed: the calendar Week view's "today" highlight could land on the wrong
+ *    day for users in non-UTC timezones (date keys now use local time, not UTC).
  *
  * v1.1.5 — Grow plot dropdown + Unassigned plot surfacing
  *  - Plant details: "Grow plot" is now a dropdown (Unassigned first, then
@@ -63,6 +65,18 @@ const isoDisp = iso => {
   if (!iso) return "—";
   try { return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
   catch { return iso; }
+};
+
+// Local-timezone YYYY-MM-DD key for a Date. Use this instead of
+// Date.toISOString().slice(0,10), which converts to UTC and can roll a
+// local date to the next/previous day for non-UTC users — that mismatch
+// is what made the calendar's "today" highlight land on the wrong column.
+// Event dates from the backend are local dates, so keys must be local too.
+const localKey = d => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 };
 
 const eventIcon = type => ({
@@ -1327,7 +1341,6 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 }
 .alert-banner-dismiss:hover{background:rgba(255,255,255,.32)}
 `;
-
 /* ─── Card class ─────────────────────────────────────────────────────────── */
 
 class AgribuddyCard extends HTMLElement {
@@ -1924,7 +1937,7 @@ class AgribuddyCard extends HTMLElement {
     const plants = plot.plants || [];
     if (!plants.length) return;
     if (!confirm(`Mark all ${plants.length} plant${plants.length === 1 ? "" : "s"} in "${plot.name}" as watered today?`)) return;
-    const date = new Date().toISOString().slice(0, 10);
+    const date = localKey(new Date());
     const btn = this._el("water-all-btn");
     if (btn) { btn.disabled = true; btn.textContent = "Watering…"; }
     try {
@@ -2169,10 +2182,10 @@ class AgribuddyCard extends HTMLElement {
   }
 
   _tplPlannerWeek(plants, view, today) {
-    const todayKey = today.toISOString().slice(0, 10);
+    const todayKey = localKey(today);
     const dayLbls = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const hdrs = dayLbls.map((l, i) => {
-      const isToday = view.days[i].toISOString().slice(0, 10) === todayKey;
+      const isToday = localKey(view.days[i]) === todayKey;
       return `<div class="planner-hdr${isToday ? ' today' : ''}">${l} <span style="opacity:.5">${view.days[i].getDate()}</span></div>`;
     }).join("");
 
@@ -2184,10 +2197,10 @@ class AgribuddyCard extends HTMLElement {
     const rows = plants.map(p => {
       const evts = this._eventsWithProjections(p);
       const cellHtml = view.days.map(d => {
-        const ds = d.toISOString().slice(0, 10);
+        const ds = localKey(d);
         const ev = evts.find(e => e.date === ds);
         const dot = ev ? this._evMarker(ev) : "";
-        const isFuture = d > today;
+        const isFuture = ds > todayKey;
         const isToday = ds === todayKey;
         return `<div class="plan-cell${isToday ? ' today' : ''}${isFuture ? ' future' : ''}">${dot}</div>`;
       }).join("");
@@ -2378,7 +2391,7 @@ class AgribuddyCard extends HTMLElement {
     const clearOvBtn = this._el("clear-ov-btn");
     if (saveOvBtn) saveOvBtn.onclick = () => this._saveOverrides();
     if (clearOvBtn) clearOvBtn.onclick = () => this._clearOverrides();
-    const ed = this._el("evt-date"); if (ed) ed.value = new Date().toISOString().slice(0, 10);
+    const ed = this._el("evt-date"); if (ed) ed.value = localKey(new Date());
 
     // Settings overlay
     this._el("close-settings-btn").onclick = () => this._close("settings-overlay");
@@ -2997,19 +3010,19 @@ class AgribuddyCard extends HTMLElement {
 
   _tplPlantWeek(plant) {
     const today = new Date();
-    const todayKey = today.toISOString().slice(0, 10);
+    const todayKey = localKey(today);
     const { days } = this._plannerWeekRange(today, this._plantCalWeekOffset || 0);
     const dayLbls = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const evts = this._eventsWithProjections(plant);
     const wlog = this._weatherLog || {};
     const hdrs = dayLbls.map((l, i) => {
-      const isToday = days[i].toISOString().slice(0, 10) === todayKey;
+      const isToday = localKey(days[i]) === todayKey;
       return `<div class="planner-hdr${isToday ? ' today' : ''}">${l} <span style="opacity:.5">${days[i].getDate()}</span></div>`;
     }).join("");
     const cells = days.map(d => {
-      const ds = d.toISOString().slice(0, 10);
+      const ds = localKey(d);
       const isToday = ds === todayKey;
-      const isFuture = d > today;
+      const isFuture = ds > todayKey;
       const dayEvts = evts.filter(e => e.date === ds);
       const w = wlog[ds] || {};
       const wdots = [];
@@ -3070,7 +3083,7 @@ class AgribuddyCard extends HTMLElement {
     if (endStage) stages.push(endStage);
     else {
       const now = new Date();
-      const endX = now.getFullYear() === year ? xFor(now.toISOString().slice(0, 10)) : 1;
+      const endX = now.getFullYear() === year ? xFor(localKey(now)) : 1;
       if (stages.length) stages.push({ x: endX, color: stages[stages.length - 1].color, label: "", growingEnd: true });
     }
 
@@ -3097,7 +3110,7 @@ class AgribuddyCard extends HTMLElement {
     if (!stages.length) {
       segs = `<text x="${(W / 2).toFixed(0)}" y="${midY + 4}" text-anchor="middle" font-size="11" class="pcal-empty">No lifecycle events in ${year}</text>`;
     }
-    const tx = px(xFor(new Date().toISOString().slice(0, 10)));
+    const tx = px(xFor(localKey(new Date())));
     const todayMarker = (year === curYear)
       ? `<line x1="${tx}" y1="18" x2="${tx}" y2="58" class="pcal-today"/>`
       : "";
@@ -4090,7 +4103,7 @@ class AgribuddyCard extends HTMLElement {
 
   _quickWater(pid) {
     this._hass.callService(DOMAIN, "log_event", {
-      plant_id: pid, event_type: "watered", date: new Date().toISOString().slice(0, 10),
+      plant_id: pid, event_type: "watered", date: localKey(new Date()),
     }).then(() => {
       this._ok("Watering logged.");
       // Bus event will trigger refresh; also update this list optimistically
@@ -4401,7 +4414,7 @@ class AgribuddyCard extends HTMLElement {
               </select>
             </div>
             <div class="form-row"><span class="form-label">Planting date <span style="opacity:.7">(can be future)</span></span>
-              <input class="form-input" type="date" id="add-start-date" value="${new Date().toISOString().slice(0, 10)}">
+              <input class="form-input" type="date" id="add-start-date" value="${localKey(new Date())}">
             </div>
             <button class="btn btn-accent btn-full" id="confirm-add-btn">Add plant to ${this._esc(plotName || "plot")}</button>
           </div>

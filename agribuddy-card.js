@@ -1617,7 +1617,7 @@ class AgribuddyCard extends HTMLElement {
 
       <div id="view-container"></div>
 
-      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.2</div>
+      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.3</div>
 
       ${this._tplPlantOverlay()}
       ${this._tplSettingsOverlay()}

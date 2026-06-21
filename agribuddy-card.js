@@ -1,6 +1,17 @@
 /**
- * Agribuddy Card  v1.2.0
+ * Agribuddy Card  v1.2.1
  * type: custom:agribuddy-card
+ *
+ * v1.2.1 — Layout + drill-down fixes
+ *  - Removed the "Auto" layout option (unreliable across HA card contexts);
+ *    Landscape is the default, with an explicit Portrait toggle. Any stored
+ *    "auto" preference falls back to Landscape.
+ *  - Plant drill-down Week view: day headers now align to their event cells
+ *    (shared 7-column grid) with a visible bordered grid spanning full width.
+ *  - Plant Profile Water tile now mirrors the Water-schedule value (honoring
+ *    user overrides), falling back to the API water requirement; Light tile
+ *    likewise reflects overrides.
+ *  - Removed dead CSS from the previous auto-orientation attempt.
  *
  * v1.2.0 — Plant Profile radar, per-plant calendar, recolor
  *  - Main view: removed the global planner; the Plants list is now the
@@ -557,8 +568,6 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 .tcm-cal-navbtn{background:transparent;border:0;font-size:16px;color:var(--secondary-text-color);cursor:pointer;padding:0 4px}
 .tcm-cal-navlbl{font-size:12px;min-width:64px;text-align:center}
 .planner-row-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
-.planner-hdrs-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;padding-left:0}
-.planner-hdrs-single .planner-hdr{text-align:center}
 .evt-dot-weather{opacity:.85}
 .tcm-cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:10.5px;color:var(--secondary-text-color)}
 .tcm-cal-leg{display:flex;align-items:center;gap:5px}
@@ -926,72 +935,15 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 .theme-toggle-btn.active:hover{background:#0F6E56}
 
 /* ── Portrait layout rules ─────────────────────────────────────────────
-   Applied when either:
-     - The card has class 'layout-portrait' (explicit user choice), OR
-     - The card has class 'layout-auto' AND the host viewport ≤ 600px wide
-       (phone or small tablet portrait — auto detection)
-   Landscape mode is the default existing layout — no rules needed.
+   Applied when the card has class 'layout-portrait' (explicit user choice).
+   Landscape is the default layout — no rules needed. The previous "auto"
+   option (a viewport media query) was removed: it was unreliable inside HA's
+   varied card contexts, so users now pick Portrait or Landscape explicitly.
    We re-flow EXISTING markup; nothing about the JS render path changes. */
 
-/* === Helper: a single selector covers both portrait triggers === */
-:host(.layout-portrait) .metrics,
-:host(.layout-auto) .metrics{}
-/* Use a class on the host so we don't need :host-context. We then use a
-   media query inside each rule to gate the auto case. */
-
-/* Metric row: 4-across → 2x2 grid in portrait so each tile stays a
-   tap-friendly size. */
-@media (max-width: 600px){
-  :host(.layout-auto) .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
-  :host(.layout-auto) .plot-grid{grid-template-columns:1fr}
-  :host(.layout-auto) .pills{flex-wrap:wrap}
-  :host(.layout-auto) .planner-controls{flex-wrap:wrap;gap:4px}
-  :host(.layout-auto) .planner-tab{padding:4px 9px;font-size:11px}
-  /* Plant table → vertical card stack on phone. Each plant becomes a
-     stacked card with name on top, then key/value rows. Hides the
-     conventional table header. */
-  :host(.layout-auto) .plot-table thead{display:none}
-  :host(.layout-auto) .plot-table,
-  :host(.layout-auto) .plot-table tbody,
-  :host(.layout-auto) .plot-table tr,
-  :host(.layout-auto) .plot-table td{display:block;width:100%}
-  :host(.layout-auto) .plot-table tr.plant-row{
-    border:1px solid var(--divider-color);
-    border-radius:10px;
-    margin-bottom:8px;
-    padding:10px 12px;
-    background:var(--card-background-color, #fff);
-  }
-  :host(.layout-auto) .plot-table tr.plant-row td{
-    padding:3px 0;border:0;
-  }
-  :host(.layout-auto) .plot-table tr.plant-row td.chev{display:none}
-  /* Each meta cell prefixed with its column-label via data-label attribute,
-     populated by JS at render time. The label sits inline at left. */
-  :host(.layout-auto) .plot-table tr.plant-row td.plant-table-meta::before{
-    content:attr(data-label) ": ";
-    color:var(--secondary-text-color);
-    font-size:11px;
-    font-weight:500;
-    text-transform:uppercase;
-    letter-spacing:.04em;
-    margin-right:6px;
-  }
-  :host(.layout-auto) .plot-table tr.plant-row td.plant-table-meta{
-    font-size:12px;
-    display:flex;justify-content:space-between;align-items:baseline;gap:8px;
-  }
-  /* Trading card: shorter plant, stacked light/water tiles, single-column kv grid */
-  :host(.layout-auto) .tcm-image{height:110px}
-  :host(.layout-auto) .tcm-image-content{font-size:62px}
-  :host(.layout-auto) .tcm-tile-row{grid-template-columns:1fr}
-  :host(.layout-auto) .tcm-body{padding:12px 14px 14px}
-  :host(.layout-auto) .popup-card{max-width:100%}
-}
-
 /* === Forced-portrait class === */
-/* When the user explicitly picks "Portrait" we apply the same rules
-   without the media query, so it works regardless of host viewport. */
+/* When the user picks "Portrait" we apply the stacked layout regardless of
+   host viewport. */
 :host(.layout-portrait) .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
 :host(.layout-portrait) .plot-grid{grid-template-columns:1fr}
 :host(.layout-portrait) .pills{flex-wrap:wrap}
@@ -1367,10 +1319,6 @@ class AgribuddyCard extends HTMLElement {
     // on a CSS media query so the host's viewport width decides; the two
     // explicit values force one or the other regardless of viewport.
     this._layoutPref = "auto";
-    // Resolved concrete layout for the "auto" pref, set by _observeWidth's
-    // ResizeObserver from the card's measured width. Null until first measure.
-    this._autoResolved = null;
-    this._resizeObs = null;
     try {
       const stored = window.localStorage.getItem("agribuddy:layout");
       if (stored === "portrait" || stored === "landscape" || stored === "auto") {
@@ -1440,47 +1388,15 @@ class AgribuddyCard extends HTMLElement {
 
   /**
    * Mirror the active layout preference onto the host element as a CSS
-   * class so the stylesheet rules can react. Three classes are exclusive:
-   * `layout-auto`, `layout-portrait`, `layout-landscape`. The CSS uses
-   * `layout-auto` + a media query for the auto case, and the two explicit
-   * classes win unconditionally when set.
+   * class so the stylesheet rules can react. Two classes are exclusive:
+   * `layout-portrait` / `layout-landscape`. (The old `layout-auto` option
+   * was removed; landscape is the default.) We still remove `layout-auto`
+   * here so any value persisted by an older version is cleared.
    */
   _applyLayoutClass() {
     const host = this;  // the custom element itself
     host.classList.remove("layout-auto", "layout-portrait", "layout-landscape");
-    // "auto" resolves to a concrete portrait/landscape class based on the
-    // card's OWN measured width (via _observeWidth's ResizeObserver), not the
-    // viewport — a viewport media query misses narrow-card contexts (sidebar
-    // dashboards, multi-column masonry, tablets). The explicit prefs win
-    // unconditionally. Until the observer has measured once, default to
-    // landscape (the historical default) to avoid a flash of portrait.
-    if (this._layoutPref === "auto") {
-      host.classList.add(`layout-${this._autoResolved || "landscape"}`);
-    } else {
-      host.classList.add(`layout-${this._layoutPref}`);
-    }
-  }
-
-  /**
-   * Observe the card element's own width and, while in "auto" layout,
-   * resolve to portrait (≤500px) or landscape. Card-width — not viewport —
-   * is what actually determines whether the dense landscape table fits, so
-   * this is more reliable than the old `@media (max-width)` approach for
-   * narrow-card placements. Only re-applies the class when the resolved
-   * value changes, so it's cheap.
-   */
-  _observeWidth() {
-    if (this._resizeObs || typeof ResizeObserver === "undefined") return;
-    this._resizeObs = new ResizeObserver(entries => {
-      if (this._layoutPref !== "auto") return;  // explicit prefs are fixed
-      const w = entries[0]?.contentRect?.width || 0;
-      const next = (w > 0 && w <= 500) ? "portrait" : "landscape";
-      if (next !== this._autoResolved) {
-        this._autoResolved = next;
-        this._applyLayoutClass();
-      }
-    });
-    this._resizeObs.observe(this);
+    host.classList.add(`layout-${this._layoutPref}`);
   }
 
   /**
@@ -1503,7 +1419,6 @@ class AgribuddyCard extends HTMLElement {
     if (!this._initialized) {
       this._applyLayoutClass();
       this._applyThemeClass();
-      this._observeWidth();
       this._render();
       this._initialized = true;
       this._subscribeBusEvents();
@@ -1533,7 +1448,6 @@ class AgribuddyCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._busUnsub) { try { this._busUnsub(); } catch (e) { } this._busUnsub = null; }
-    if (this._resizeObs) { try { this._resizeObs.disconnect(); } catch (e) { } this._resizeObs = null; }
   }
 
   _el(id) { return this.shadowRoot.getElementById(id); }
@@ -1696,7 +1610,7 @@ class AgribuddyCard extends HTMLElement {
 
       <div id="view-container"></div>
 
-      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.0</div>
+      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.1</div>
 
       ${this._tplPlantOverlay()}
       ${this._tplSettingsOverlay()}
@@ -3073,7 +2987,7 @@ class AgribuddyCard extends HTMLElement {
         + wdots.map(c => `<span class="evt-dot evt-dot-weather" style="background:${c}"></span>`).join("");
       return `<div class="plan-cell${isToday ? ' today' : ''}${isFuture ? ' future' : ''}">${dots}</div>`;
     }).join("");
-    return `<div class="planner-hdrs planner-hdrs-single">${hdrs}</div><div class="planner-row-single">${cells}</div>
+    return `<div class="planner-hdrs">${hdrs}</div><div class="planner-row-single">${cells}</div>
       ${this._tplPlantCalLegendWeek()}`;
   }
 
@@ -3221,8 +3135,29 @@ class AgribuddyCard extends HTMLElement {
     this._maybeBackfillSpecies(plant);
 
     // ── Light + water chips (top banner) ──────────────────────────────
+    // Light reflects the (override-aware) light requirement. Water mirrors
+    // the Water-schedule box below: user-entered min/max days when present,
+    // otherwise the API-derived schedule, falling back to the categorical
+    // water_use string. plant.* values already have user overrides layered
+    // on by the backend's _enrich, so reading them honors user entry.
     this._el("tc-light-text").textContent = v(plant.light_requirements);
-    this._el("tc-water-text").textContent = v(plant.water_use);
+
+    // Water schedule (numeric min..max days) — computed once, used for BOTH
+    // the Water tile and the Water-schedule grid row so they always agree.
+    const wMin = plant.watering_min_days;
+    const wMax = plant.watering_max_days;
+    let waterRange = dash;
+    if (wMin != null && wMax != null) {
+      waterRange = wMin === wMax ? `every ${wMin} days` : `${wMin}–${wMax} days`;
+    } else if (wMin != null) {
+      waterRange = `every ${wMin} days`;
+    } else if (wMax != null) {
+      waterRange = `up to ${wMax} days`;
+    }
+    // Water tile: prefer the concrete schedule; fall back to the categorical
+    // requirement (e.g. "Moderate") when no day range is available.
+    this._el("tc-water-text").textContent =
+      waterRange !== dash ? waterRange : v(plant.water_use);
 
     // ── Name + scientific name banners ────────────────────────────────
     this._el("tc-common-name").textContent =
@@ -3249,17 +3184,6 @@ class AgribuddyCard extends HTMLElement {
     }
     this._el("tc-harvest").textContent = v(plant.harvest_range);
 
-    // Water schedule (numeric min..max days, what automations key off of)
-    const wMin = plant.watering_min_days;
-    const wMax = plant.watering_max_days;
-    let waterRange = dash;
-    if (wMin != null && wMax != null) {
-      waterRange = wMin === wMax ? `every ${wMin} days` : `${wMin}–${wMax} days`;
-    } else if (wMin != null) {
-      waterRange = `every ${wMin} days`;
-    } else if (wMax != null) {
-      waterRange = `up to ${wMax} days`;
-    }
     this._el("tc-water-range").textContent = waterRange;
 
     // Days since water — shows the integer count from days_since_watered
@@ -4001,7 +3925,7 @@ class AgribuddyCard extends HTMLElement {
         <span style="color:var(--secondary-text-color)">API client:</span>
         <span style="color:${ok ? "#0F6E56" : "#993C1D"};font-weight:600">${ok ? "✓ Ready" : "✗ Not loaded"}</span>${usageRow}
         <span style="color:var(--secondary-text-color)">Backend http_api:</span>
-        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.2.0)"}</span>
+        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.2.1)"}</span>
       </div>`;
       // Pre-fill the form fields from backend values when card config doesn't override
       const wsel = this._el("cfg-weather");
@@ -4805,7 +4729,7 @@ if (!window.customCards.some(c => c.type === "agribuddy-card")) {
   });
 }
 console.info(
-  "%c Agribuddy CARD %c v1.2.0 ",
+  "%c Agribuddy CARD %c v1.2.1 ",
   "background:#1D9E75;color:#fff;font-weight:bold;padding:2px 4px;border-radius:4px 0 0 4px",
   "background:#0F6E56;color:#fff;padding:2px 4px;border-radius:0 4px 4px 0",
 );

@@ -567,7 +567,14 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 .tcm-cal-nav{display:flex;align-items:center;gap:6px;margin-left:auto;color:var(--secondary-text-color)}
 .tcm-cal-navbtn{background:transparent;border:0;font-size:16px;color:var(--secondary-text-color);cursor:pointer;padding:0 4px}
 .tcm-cal-navlbl{font-size:12px;min-width:64px;text-align:center}
-.planner-row-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.planner-row-single{display:grid;grid-template-columns:repeat(7,1fr);gap:0;width:100%;border:1px solid var(--divider-color);border-radius:6px;overflow:hidden}
+.planner-row-single .plan-cell{border-right:1px solid var(--divider-color);min-height:40px;flex:none}
+.planner-row-single .plan-cell:last-child{border-right:0}
+/* Per-plant week header: override .planner-hdrs' 90px gutter + flex with the
+   SAME 7-col grid the cells use, so each Mon–Sun label sits exactly above its
+   cell. Without this it inherits padding-left:90px and skews right. */
+.planner-hdrs-single{display:grid;grid-template-columns:repeat(7,1fr);gap:0;width:100%;padding-left:0}
+.planner-hdrs-single .planner-hdr{text-align:center}
 .evt-dot-weather{opacity:.85}
 .tcm-cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:10.5px;color:var(--secondary-text-color)}
 .tcm-cal-leg{display:flex;align-items:center;gap:5px}
@@ -2987,7 +2994,7 @@ class AgribuddyCard extends HTMLElement {
         + wdots.map(c => `<span class="evt-dot evt-dot-weather" style="background:${c}"></span>`).join("");
       return `<div class="plan-cell${isToday ? ' today' : ''}${isFuture ? ' future' : ''}">${dots}</div>`;
     }).join("");
-    return `<div class="planner-hdrs">${hdrs}</div><div class="planner-row-single">${cells}</div>
+    return `<div class="planner-hdrs planner-hdrs-single">${hdrs}</div><div class="planner-row-single">${cells}</div>
       ${this._tplPlantCalLegendWeek()}`;
   }
 

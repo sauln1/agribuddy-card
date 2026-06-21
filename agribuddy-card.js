@@ -557,6 +557,8 @@ details[open] .tcm-care-sec-chev{transform:rotate(180deg)}
 .tcm-cal-navbtn{background:transparent;border:0;font-size:16px;color:var(--secondary-text-color);cursor:pointer;padding:0 4px}
 .tcm-cal-navlbl{font-size:12px;min-width:64px;text-align:center}
 .planner-row-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.planner-hdrs-single{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;padding-left:0}
+.planner-hdrs-single .planner-hdr{text-align:center}
 .evt-dot-weather{opacity:.85}
 .tcm-cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:10.5px;color:var(--secondary-text-color)}
 .tcm-cal-leg{display:flex;align-items:center;gap:5px}
@@ -1365,6 +1367,10 @@ class AgribuddyCard extends HTMLElement {
     // on a CSS media query so the host's viewport width decides; the two
     // explicit values force one or the other regardless of viewport.
     this._layoutPref = "auto";
+    // Resolved concrete layout for the "auto" pref, set by _observeWidth's
+    // ResizeObserver from the card's measured width. Null until first measure.
+    this._autoResolved = null;
+    this._resizeObs = null;
     try {
       const stored = window.localStorage.getItem("agribuddy:layout");
       if (stored === "portrait" || stored === "landscape" || stored === "auto") {
@@ -1442,7 +1448,39 @@ class AgribuddyCard extends HTMLElement {
   _applyLayoutClass() {
     const host = this;  // the custom element itself
     host.classList.remove("layout-auto", "layout-portrait", "layout-landscape");
-    host.classList.add(`layout-${this._layoutPref}`);
+    // "auto" resolves to a concrete portrait/landscape class based on the
+    // card's OWN measured width (via _observeWidth's ResizeObserver), not the
+    // viewport — a viewport media query misses narrow-card contexts (sidebar
+    // dashboards, multi-column masonry, tablets). The explicit prefs win
+    // unconditionally. Until the observer has measured once, default to
+    // landscape (the historical default) to avoid a flash of portrait.
+    if (this._layoutPref === "auto") {
+      host.classList.add(`layout-${this._autoResolved || "landscape"}`);
+    } else {
+      host.classList.add(`layout-${this._layoutPref}`);
+    }
+  }
+
+  /**
+   * Observe the card element's own width and, while in "auto" layout,
+   * resolve to portrait (≤500px) or landscape. Card-width — not viewport —
+   * is what actually determines whether the dense landscape table fits, so
+   * this is more reliable than the old `@media (max-width)` approach for
+   * narrow-card placements. Only re-applies the class when the resolved
+   * value changes, so it's cheap.
+   */
+  _observeWidth() {
+    if (this._resizeObs || typeof ResizeObserver === "undefined") return;
+    this._resizeObs = new ResizeObserver(entries => {
+      if (this._layoutPref !== "auto") return;  // explicit prefs are fixed
+      const w = entries[0]?.contentRect?.width || 0;
+      const next = (w > 0 && w <= 500) ? "portrait" : "landscape";
+      if (next !== this._autoResolved) {
+        this._autoResolved = next;
+        this._applyLayoutClass();
+      }
+    });
+    this._resizeObs.observe(this);
   }
 
   /**
@@ -1465,6 +1503,7 @@ class AgribuddyCard extends HTMLElement {
     if (!this._initialized) {
       this._applyLayoutClass();
       this._applyThemeClass();
+      this._observeWidth();
       this._render();
       this._initialized = true;
       this._subscribeBusEvents();
@@ -1494,6 +1533,7 @@ class AgribuddyCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._busUnsub) { try { this._busUnsub(); } catch (e) { } this._busUnsub = null; }
+    if (this._resizeObs) { try { this._resizeObs.disconnect(); } catch (e) { } this._resizeObs = null; }
   }
 
   _el(id) { return this.shadowRoot.getElementById(id); }
@@ -3033,7 +3073,7 @@ class AgribuddyCard extends HTMLElement {
         + wdots.map(c => `<span class="evt-dot evt-dot-weather" style="background:${c}"></span>`).join("");
       return `<div class="plan-cell${isToday ? ' today' : ''}${isFuture ? ' future' : ''}">${dots}</div>`;
     }).join("");
-    return `<div class="planner-hdrs">${hdrs}</div><div class="planner-row-single">${cells}</div>
+    return `<div class="planner-hdrs planner-hdrs-single">${hdrs}</div><div class="planner-row-single">${cells}</div>
       ${this._tplPlantCalLegendWeek()}`;
   }
 

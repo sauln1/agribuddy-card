@@ -1,6 +1,17 @@
 /**
- * Agribuddy Card  v1.2.1
+ * Agribuddy Card  v1.2.4
  * type: custom:agribuddy-card
+ *
+ * v1.2.4 — Custom (user-created) plants
+ *  - Add-plant overlay: a "Create Plant" button under the search bar opens a
+ *    blank form where you enter your own values (Sunlight, Water, Zones, Size,
+ *    Growth, plus name, scientific name, hardiness, soil preference, soil pH,
+ *    spacing, growth period, days to harvest, water schedule, toxicity, and
+ *    care instructions). Care is auto-computed from the five radar inputs.
+ *  - The plant is saved locally via add_plant (no API call). A ✏️ badge marks
+ *    custom plants next to the name in both the drill-down and the main list.
+ *  - Custom plants never trigger the lazy species backfill (no API source).
+ *  - Edit plant details works the same as for API plants.
  *
  * v1.2.1 — Layout + drill-down fixes
  *  - Removed the "Auto" layout option (unreliable across HA card contexts);
@@ -1617,7 +1628,7 @@ class AgribuddyCard extends HTMLElement {
 
       <div id="view-container"></div>
 
-      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.3</div>
+      <div style="margin-top:14px;font-size:10px;color:var(--secondary-text-color);opacity:.45;text-align:right;user-select:none">agribuddy-v1.2.4</div>
 
       ${this._tplPlantOverlay()}
       ${this._tplSettingsOverlay()}
@@ -1990,7 +2001,7 @@ class AgribuddyCard extends HTMLElement {
                 <td>
                   <div class="plant-name-cell">${thumb}
                     <div>
-                      <div>${this._esc(p.plant_name || p.name || p.entity_id)}</div>
+                      <div>${this._esc(p.plant_name || p.name || p.entity_id)}${p.is_custom ? ` <span title="Custom plant (created by you)" style="font-size:.8em">✏️</span>` : ""}</div>
                       <span class="badge" style="background:${bg};color:${color}">${label}</span>
                     </div>
                   </div>
@@ -2886,6 +2897,8 @@ class AgribuddyCard extends HTMLElement {
   _speciesDataStale(plant) {
     const sd = plant.species_data || {};
     if (!sd || !Object.keys(sd).length) return false;
+    // Custom (user-created) plants have no API source to backfill from.
+    if (sd.is_custom) return false;
     const ci = sd.careInstructions;
     const gd = sd.growthDetails || {};
     const hasCare = ci && typeof ci === "object" && Object.keys(ci).length;
@@ -3167,8 +3180,16 @@ class AgribuddyCard extends HTMLElement {
       waterRange !== dash ? waterRange : v(plant.water_use);
 
     // ── Name + scientific name banners ────────────────────────────────
-    this._el("tc-common-name").textContent =
-      plant.common_name || plant.plant_name || plant.name || "";
+    // Custom (user-created) plants get a ✏️ badge after the name.
+    const nameEl = this._el("tc-common-name");
+    nameEl.textContent = plant.common_name || plant.plant_name || plant.name || "";
+    if (plant.is_custom) {
+      const pencil = document.createElement("span");
+      pencil.textContent = " ✏️";
+      pencil.title = "Custom plant (created by you)";
+      pencil.style.fontSize = "0.8em";
+      nameEl.appendChild(pencil);
+    }
     this._el("tc-sci-name").textContent = plant.scientific_name || "";
 
     // ── Details panel: field grid ─────────────────────────────────────
@@ -3932,7 +3953,7 @@ class AgribuddyCard extends HTMLElement {
         <span style="color:var(--secondary-text-color)">API client:</span>
         <span style="color:${ok ? "#0F6E56" : "#993C1D"};font-weight:600">${ok ? "✓ Ready" : "✗ Not loaded"}</span>${usageRow}
         <span style="color:var(--secondary-text-color)">Backend http_api:</span>
-        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.2.1)"}</span>
+        <span style="font-family:monospace;font-size:11px">${data.http_api_version || "(missing — file is older than v1.2.4)"}</span>
       </div>`;
       // Pre-fill the form fields from backend values when card config doesn't override
       const wsel = this._el("cfg-weather");
@@ -4356,6 +4377,17 @@ class AgribuddyCard extends HTMLElement {
               ⚠ Free tier: 25 API calls/month. Each unique search costs 1 call.
               Repeated searches for the same term (within 30 days) are free.
             </div>
+            <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+              <div style="flex:1;height:1px;background:var(--divider-color)"></div>
+              <span style="font-size:11px;color:var(--secondary-text-color)">or</span>
+              <div style="flex:1;height:1px;background:var(--divider-color)"></div>
+            </div>
+            <button class="btn btn-full" id="create-plant-btn" style="margin-top:10px">
+              ✏️ Create Plant
+            </button>
+            <div class="form-hint" style="margin-top:4px;text-align:center">
+              Not in the database? Add your own plant with custom values — saved locally, no API call.
+            </div>
             <div id="search-spinner-wrap" style="display:none;padding:8px 0;font-size:13px;color:var(--secondary-text-color)">
               <span class="spinner"></span>Searching Verdantly…
             </div>
@@ -4389,6 +4421,146 @@ class AgribuddyCard extends HTMLElement {
             </div>
             <button class="btn btn-accent btn-full" id="confirm-add-btn">Add plant to ${this._esc(plotName || "plot")}</button>
           </div>
+          <div id="add-step-create" style="display:none">
+            <button class="btn" id="create-back-btn" style="margin-bottom:14px;font-size:11px">← Back to search</button>
+            <div class="sec-title"><span>Create a custom plant</span></div>
+            <p style="font-size:11px;color:var(--secondary-text-color);margin-bottom:12px;line-height:1.45">
+              Enter whatever you know — every field is optional. The radar profile
+              is built from Sunlight, Water, Zones, Size and Growth; Care is
+              calculated from those five automatically.
+            </p>
+
+            <div class="form-row"><span class="form-label">Name</span>
+              <input class="form-input" type="text" id="cp-name" placeholder="e.g. Grandma's heirloom tomato">
+            </div>
+            <div class="form-row"><span class="form-label">Scientific name</span>
+              <input class="form-input" type="text" id="cp-sci-name" placeholder="e.g. Solanum lycopersicum">
+            </div>
+
+            <hr class="divider">
+            <div class="sec-title"><span>Radar profile</span></div>
+
+            <div class="form-row"><span class="form-label">☀️ Sunlight</span>
+              <select class="form-select" id="cp-sunlight">
+                <option value="">—</option>
+                <option value="Shade">Shade</option>
+                <option value="Partial Sun">Partial Sun</option>
+                <option value="Full Sun">Full Sun</option>
+              </select>
+              <span class="form-hint">Radar scale: Shade = low (0) → Full Sun = high (2).</span>
+            </div>
+            <div class="form-row"><span class="form-label">💧 Water</span>
+              <select class="form-select" id="cp-water">
+                <option value="">—</option>
+                <option value="Low">Low</option>
+                <option value="Moderate">Moderate</option>
+                <option value="High">High</option>
+              </select>
+              <span class="form-hint">Radar scale: Low = low (0) → High = high (2).</span>
+            </div>
+            <div class="form-row"><span class="form-label">📏 Zones (growing zone range)</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" type="text" id="cp-zone-min" placeholder="min (e.g. 3)" style="flex:1">
+                <span style="color:var(--secondary-text-color)">–</span>
+                <input class="form-input" type="text" id="cp-zone-max" placeholder="max (e.g. 9)" style="flex:1">
+              </div>
+              <span class="form-hint">Radar scale: a wider min–max spread scores higher (capped at max).</span>
+            </div>
+            <div class="form-row"><span class="form-label">🌡️ Size (mature height)</span>
+              <input class="form-input" type="text" id="cp-size" placeholder="e.g. 72 in, 1.5 m">
+              <span class="form-hint">Numbers and letters allowed. Radar scale: taller = higher (the leading number is used).</span>
+            </div>
+            <div class="form-row"><span class="form-label">⚡ Growth type</span>
+              <select class="form-select" id="cp-growth-type">
+                <option value="">—</option>
+                <option value="Determinate">Determinate</option>
+                <option value="Indeterminate">Indeterminate</option>
+              </select>
+              <span class="form-hint">Radar scale: Determinate = low, Indeterminate = high. Combined with growth period below.</span>
+            </div>
+
+            <hr class="divider">
+            <div class="sec-title"><span>Details</span></div>
+
+            <div class="form-row"><span class="form-label">Growth period</span>
+              <select class="form-select" id="cp-growth-period">
+                <option value="">—</option>
+                <option value="Annual">Annual</option>
+                <option value="Biennial">Biennial</option>
+                <option value="Perennial">Perennial</option>
+              </select>
+            </div>
+            <div class="form-row"><span class="form-label">Hardiness zone range</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" type="text" id="cp-hardy-min" placeholder="min (e.g. 4a)" style="flex:1">
+                <span style="color:var(--secondary-text-color)">–</span>
+                <input class="form-input" type="text" id="cp-hardy-max" placeholder="max (e.g. 9b)" style="flex:1">
+              </div>
+            </div>
+            <div class="form-row"><span class="form-label">Soil preference</span>
+              <input class="form-input" type="text" id="cp-soil-pref" placeholder="e.g. Well-drained loam">
+            </div>
+            <div class="form-row"><span class="form-label">Soil pH range</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" type="number" step="0.1" min="0" max="14" id="cp-ph-min" placeholder="min (e.g. 6.0)" style="flex:1">
+                <span style="color:var(--secondary-text-color)">–</span>
+                <input class="form-input" type="number" step="0.1" min="0" max="14" id="cp-ph-max" placeholder="max (e.g. 6.8)" style="flex:1">
+              </div>
+            </div>
+            <div class="form-row"><span class="form-label">Spacing</span>
+              <input class="form-input" type="text" id="cp-spacing" placeholder="e.g. 24 inches">
+            </div>
+            <div class="form-row"><span class="form-label">Days to harvest</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" type="number" min="1" id="cp-harvest-min" placeholder="min (e.g. 75)" style="flex:1">
+                <span style="color:var(--secondary-text-color)">–</span>
+                <input class="form-input" type="number" min="1" id="cp-harvest-max" placeholder="max (e.g. 90)" style="flex:1">
+              </div>
+            </div>
+            <div class="form-row"><span class="form-label">💧 Water schedule (days between)</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" type="number" min="1" max="365" id="cp-water-min" placeholder="min days" style="flex:1">
+                <span style="color:var(--secondary-text-color)">to</span>
+                <input class="form-input" type="number" min="1" max="365" id="cp-water-max" placeholder="max days" style="flex:1">
+              </div>
+              <span class="form-hint">Drives the Water tile and the "thirsty" alert. Min is the alert threshold.</span>
+            </div>
+            <div class="form-row"><span class="form-label">Toxicity</span>
+              <select class="form-select" id="cp-toxicity">
+                <option value="">None</option>
+                <option value="Toxic to pets">Toxic to pets</option>
+                <option value="Toxic to humans">Toxic to humans</option>
+                <option value="Toxic to pets and humans">Toxic to pets and humans</option>
+              </select>
+            </div>
+
+            <hr class="divider">
+            <div class="sec-title"><span>Care instructions</span></div>
+            <div class="form-row"><span class="form-label">🏠 Start indoors</span>
+              <textarea class="form-textarea" id="cp-start-indoors" placeholder="e.g. Start 6–8 weeks before last frost…"></textarea>
+            </div>
+            <div class="form-row"><span class="form-label">🌱 Transplant outdoors</span>
+              <textarea class="form-textarea" id="cp-transplant" placeholder="e.g. After last frost when soil is warm…"></textarea>
+            </div>
+            <div class="form-row"><span class="form-label">🌾 Direct sow</span>
+              <textarea class="form-textarea" id="cp-direct-sow" placeholder="e.g. Sow 1/4 inch deep after frost…"></textarea>
+            </div>
+            <div class="form-row"><span class="form-label">🧺 Harvesting</span>
+              <textarea class="form-textarea" id="cp-harvesting" placeholder="e.g. Pick when fully colored…"></textarea>
+            </div>
+
+            <hr class="divider">
+            <div class="sec-title"><span>Planting</span></div>
+            <div class="form-row"><span class="form-label">Started from</span>
+              <select class="form-select" id="cp-start-type">
+                <option value="seed">Seed</option><option value="indoor_start">Indoor start</option><option value="transplant">Transplant</option>
+              </select>
+            </div>
+            <div class="form-row"><span class="form-label">Planting date <span style="opacity:.7">(can be future)</span></span>
+              <input class="form-input" type="date" id="cp-start-date" value="${localKey(new Date())}">
+            </div>
+            <button class="btn btn-accent btn-full" id="confirm-create-btn">Create plant${plotName ? ` in ${this._esc(plotName)}` : ""}</button>
+          </div>
         `}
       </div>
     </div></div>`;
@@ -4407,6 +4579,33 @@ class AgribuddyCard extends HTMLElement {
     const countEl = overlay.querySelector("#search-count");
     const stepSearch = overlay.querySelector("#add-step-search");
     const stepForm = overlay.querySelector("#add-step-form");
+    const stepCreate = overlay.querySelector("#add-step-create");
+
+    // ── "Create Plant" flow ──────────────────────────────────────────────
+    // Opens a blank custom-plant form (no search, no API call). On save it
+    // assembles a species_data object in the same nested shape the Verdantly
+    // API returns (so _enrich + the radar read it identically), tags it
+    // is_custom + a synthetic "custom:<uuid>" id, and calls the standard
+    // add_plant service.
+    const createBtn = overlay.querySelector("#create-plant-btn");
+    if (createBtn) {
+      createBtn.onclick = () => {
+        stepSearch.style.display = "none";
+        stepForm.style.display = "none";
+        stepCreate.style.display = "block";
+      };
+    }
+    const createBack = overlay.querySelector("#create-back-btn");
+    if (createBack) {
+      createBack.onclick = () => {
+        stepCreate.style.display = "none";
+        stepSearch.style.display = "block";
+      };
+    }
+    const confirmCreate = overlay.querySelector("#confirm-create-btn");
+    if (confirmCreate) {
+      confirmCreate.onclick = () => this._confirmCreatePlant(overlay, plotId);
+    }
 
     // ── Populate the "Recent plants" chip strip ───────────────────────────
     // Pull species_data from TWO sources, dedupe by scientific name:
@@ -4600,6 +4799,161 @@ class AgribuddyCard extends HTMLElement {
     };
   }
 
+  /**
+   * Assemble a custom plant from the Create form and save it locally via the
+   * standard add_plant service (zero API calls). The species_data is built in
+   * the SAME nested shape the Verdantly /name endpoint returns, so the radar
+   * (_computeProfileMetrics), care dropdowns (_renderCareInstructions) and the
+   * backend's _enrich all read it identically. Tagged is_custom + a synthetic
+   * "custom:<uuid>" species_id so it's distinguishable from API plants (pencil
+   * badge) and never triggers the lazy backfill.
+   */
+  _confirmCreatePlant(overlay, plotId) {
+    const val = id => (overlay.querySelector("#" + id)?.value ?? "").trim();
+    const numOrNull = id => {
+      const raw = val(id);
+      if (raw === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const name = val("cp-name");
+    if (!name) { this._err("Name required", "Enter a name for your custom plant."); return; }
+
+    // Build the nested growingRequirements / growthDetails / etc. Only include
+    // sub-objects/keys that have data, so empty fields stay genuinely empty
+    // (radar shows a dash rather than a guessed score).
+    const sd = { is_custom: true, name };
+
+    const sci = val("cp-sci-name");
+    if (sci) sd.species = { scientificName: sci };
+
+    const gr = {};
+    const sun = val("cp-sunlight");
+    if (sun) gr.sunlightRequirement = sun;
+    const water = val("cp-water");
+    if (water) gr.waterRequirement = water;
+    // Radar "Zones" spoke reads gr.growingZoneRange (string). Keep it separate
+    // from the hardiness display below, which _enrich derives from
+    // min/maxGrowingZone — so we DON'T set those from the radar Zones inputs.
+    const zMin = val("cp-zone-min"), zMax = val("cp-zone-max");
+    if (zMin || zMax) {
+      gr.growingZoneRange = (zMin && zMax) ? `${zMin}-${zMax}` : (zMin || zMax);
+    }
+    const soilPref = val("cp-soil-pref");
+    if (soilPref) gr.soilPreference = soilPref;
+    const spacing = val("cp-spacing");
+    if (spacing) gr.spacingRequirement = spacing;
+    // Hardiness zone range (display) — _enrich reads min/maxGrowingZone for the
+    // hardiness_zone_range string, so the Hardiness form fields map here.
+    const hMin = val("cp-hardy-min"), hMax = val("cp-hardy-max");
+    if (hMin) gr.minGrowingZone = hMin;
+    if (hMax) gr.maxGrowingZone = hMax;
+    if (Object.keys(gr).length) sd.growingRequirements = gr;
+
+    // growthDetails — Size (matureHeight + unit) and growth type/period.
+    const gd = {};
+    const sizeRaw = val("cp-size");
+    if (sizeRaw) {
+      const numMatch = sizeRaw.match(/[\d.]+/);
+      if (numMatch) gd.matureHeight = Number(numMatch[0]);
+      const unit = sizeRaw.replace(/[\d.\s]+/g, "").trim();
+      if (unit) gd.unit = unit;
+      gd.matureHeightDisplay = sizeRaw;
+    }
+    const gType = val("cp-growth-type");
+    if (gType) gd.growthType = gType;
+    const gPeriod = val("cp-growth-period");
+    if (gPeriod) gd.growthPeriod = gPeriod;
+    if (Object.keys(gd).length) sd.growthDetails = gd;
+
+    // ecology — soil pH min/max.
+    const phMin = numOrNull("cp-ph-min"), phMax = numOrNull("cp-ph-max");
+    const eco = {};
+    if (phMin != null) eco.soilPhMin = phMin;
+    if (phMax != null) eco.soilPhMax = phMax;
+    if (Object.keys(eco).length) sd.ecology = eco;
+
+    // lifecycleMilestones — days to harvest min/max.
+    const harvMin = numOrNull("cp-harvest-min"), harvMax = numOrNull("cp-harvest-max");
+    const lm = {};
+    if (harvMin != null) lm.daysToHarvestMin = harvMin;
+    if (harvMax != null) lm.daysToHarvestMax = harvMax;
+    if (Object.keys(lm).length) sd.lifecycleMilestones = lm;
+
+    // Water schedule — _enrich derives watering_min/max_days from the water
+    // CATEGORY or from user_overrides, NOT from species_data. So we stash the
+    // user's explicit values here and, after the plant is created, write them
+    // as per-plant overrides (which is also how API plants store a custom
+    // schedule — keeping the Edit-details flow consistent).
+    const wMin = numOrNull("cp-water-min"), wMax = numOrNull("cp-water-max");
+
+    // Toxicity — store under safety.toxicity as a simple {general:{level}} map
+    // so the backend's toxicity_display picks it up (non-benign levels show).
+    const tox = val("cp-toxicity");
+    if (tox) sd.safety = { toxicity: { general: { level: tox } } };
+
+    // Care instructions — nested object the care dropdowns read.
+    const planting = {};
+    const si = val("cp-start-indoors"); if (si) planting.startIndoors = si;
+    const to = val("cp-transplant"); if (to) planting.transplantOutdoors = to;
+    const ds = val("cp-direct-sow"); if (ds) planting.directSow = ds;
+    const harvesting = val("cp-harvesting");
+    const ci = {};
+    if (Object.keys(planting).length) ci.plantingInstructions = planting;
+    if (harvesting) ci.harvestingInstructions = harvesting;
+    if (Object.keys(ci).length) sd.careInstructions = ci;
+
+    // Synthetic id — unique per custom plant.
+    const uuid = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const speciesId = `custom:${uuid}`;
+
+    const stype = val("cp-start-type") || "seed";
+    const sdate = val("cp-start-date");
+
+    const btn = overlay.querySelector("#confirm-create-btn");
+    if (btn) { btn.textContent = "Creating…"; btn.disabled = true; }
+    this._hass.callService(DOMAIN, "add_plant", {
+      plant_name: name,
+      species_id: speciesId,
+      start_type: stype,
+      start_date: sdate,
+      plot_id: plotId,
+      species_data: sd,
+    }).then(async () => {
+      // If the user entered an explicit water schedule, persist it as a
+      // per-plant override (the only place _enrich reads numeric watering
+      // days from). Locate the freshly-created plant by its unique
+      // species_id, then call update_plant_overrides.
+      if (wMin != null || wMax != null) {
+        try {
+          await this._fetchPlots();
+          const created = this._allPlants().find(
+            p => p.species_id === speciesId
+          );
+          const cpid = created && (created.plant_id || created.id);
+          if (cpid) {
+            const overrides = {};
+            if (wMin != null) overrides.watering_min_days = wMin;
+            if (wMax != null) overrides.watering_max_days = wMax;
+            await this._hass.callService(DOMAIN, "update_plant_overrides", {
+              plant_id: cpid, overrides,
+            });
+          }
+        } catch (e) {
+          console.warn("Agribuddy: custom water schedule override failed:", e);
+        }
+      }
+      overlay.remove();
+      this._ok(`${name} created!`);
+    }).catch(e => {
+      this._err("Failed to create plant", this._fmtErr(e, "agribuddy"));
+      if (btn) { btn.textContent = "Create plant"; btn.disabled = false; }
+    });
+  }
+
   async _selectSearchResult(result, overlay, stepSearch, stepForm) {
     stepSearch.style.display = "none"; stepForm.style.display = "block";
     overlay.querySelector("#back-to-search-btn").onclick = () => {
@@ -4736,7 +5090,7 @@ if (!window.customCards.some(c => c.type === "agribuddy-card")) {
   });
 }
 console.info(
-  "%c Agribuddy CARD %c v1.2.1 ",
+  "%c Agribuddy CARD %c v1.2.4 ",
   "background:#1D9E75;color:#fff;font-weight:bold;padding:2px 4px;border-radius:4px 0 0 4px",
   "background:#0F6E56;color:#fff;padding:2px 4px;border-radius:0 4px 4px 0",
 );
